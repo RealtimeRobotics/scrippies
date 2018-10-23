@@ -60,6 +60,8 @@ while getopts ":h" opt; do
 done
 shift "$((${OPTIND} - 1))"
 
+info "installing /srv/realsense.yaml"
+mkdir -vp /srv
 cat >/srv/realsense.yaml <<'EOF'
 intel-realsense-dfu:
   ubuntu: [intel-realsense-dfu]
@@ -95,6 +97,8 @@ realsense-uvcvideo:
   ubuntu: [realsense-uvcvideo]
 EOF
 
+info "installing /etc/ros/rosdep/sources.list.d/00-realsense.list"
+mkdir -vp /etc/ros/rosdep/sources.list.d/
 cat >/etc/ros/rosdep/sources.list.d/00-realsense.list <<'EOF'
 yaml file:///srv/realsense.yaml
 EOF
