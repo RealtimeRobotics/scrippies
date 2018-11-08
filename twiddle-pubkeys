@@ -1,0 +1,27 @@
+#!/bin/sh
+
+# scrippies/twiddle-pubkeys
+
+set -euvx
+
+# take arguments that behave like a gpg command; list all apt key fingerprints,
+# change owner trust to "ultimate", and re-import everything (with owner
+# trust).
+#
+# This is required for things like `apt-key adv --verify-files *.changes *.dsc`
+ultimate_trust() {
+    $@ --list-public-keys --fingerprint --with-colons \
+        | sed -nre 's/^fpr:::::::::([[:xdigit:]]+):$/\1:6:/gp' \
+        | $@ --import-ownertrust
+}
+
+ultimate_trust apt-key adv
+gpg --list-public-keys
+apt-key exportall | gpg --import
+ultimate_trust gpg
+
+# 'apt-get source' verification of 'debsign'ed '*.dsc' and '*.changes' files
+# depends on hard-coded path to non-standard gpg keyring
+#
+# https://anonscm.debian.org/cgit/dpkg/dpkg.git/commit/?id=0a3d3fe21b629b55005c14889faaf8f84c4967c7
+gpg --export >"${HOME}/.gnupg/trustedkeys.gpg"
