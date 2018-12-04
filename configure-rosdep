@@ -60,45 +60,49 @@ while getopts ":h" opt; do
 done
 shift "$((${OPTIND} - 1))"
 
-info "installing /srv/realsense.yaml"
-mkdir -vp /srv
-cat >/srv/realsense.yaml <<'EOF'
-intel-realsense-dfu:
-  ubuntu: [intel-realsense-dfu]
-librealsense2:
-  ubuntu: [librealsense2]
-librealsense2-dbg:
-  ubuntu: [librealsense2-dbg]
-librealsense2-dev:
-  ubuntu: [librealsense2-dev]
-librealsense2-dkms:
-  ubuntu: [librealsense2-dkms]
-librealsense2-udev-rules:
-  ubuntu: [librealsense2-udev-rules]
-librealsense2-utils:
-  ubuntu: [librealsense2-utils]
-librscalibrationapi:
-  ubuntu: [librscalibrationapi]
-librscalibrationtool:
-  ubuntu: [librscalibrationtool]
-realsense-sdk:
-  ubuntu: [realsense-sdk]
-realsense-sdk-dbg:
-  ubuntu: [realsense-sdk-dbg]
-realsense-sdk-dev:
-  ubuntu: [realsense-sdk-dev]
-realsense-sdk-udev-rules:
-  ubuntu: [realsense-sdk-udev-rules]
-realsense-sdk-utils:
-  ubuntu: [realsense-sdk-utils]
-rs-dfu-tool:
-  ubuntu: [rs-dfu-tool]
-realsense-uvcvideo:
-  ubuntu: [realsense-uvcvideo]
+info "discovering realsense packages"
+readonly realsense_package_list="$(mktemp -t realsense.package.list.XXXXXX)"
+find /var/lib/apt/lists -type f \
+     -a \( -name 'realsense*_Packages.gz'  -exec gzip  -dc {} \; \) \
+     -o \( -name 'realsense*_Packages.bz2' -exec bzip2 -dc {} \; \) \
+     -o \( -name 'realsense*_Packages.lz4' -exec lz4   -dc {} \; \) \
+     -o \( -name 'realsense*_Packages.xz'  -exec xz    -dc {} \; \) \
+    | sed -nr 's|^Package:[[:space:]]+([[:graph:]]+).*$|\1|gp' \
+          >"${realsense_package_list}"
+sort -uo "${realsense_package_list}" "${realsense_package_list}"
+
+readonly realsense_yaml="/var/rosdep/realsense.yaml"
+info "generating ${realsense_yaml}"
+mkdir -vp "$(dirname "${realsense_yaml}")"
+cat >"${realsense_yaml}" <<EOF
+# ${realsense_yaml}
+#
+# THIS IS A GENERATED FILE
+# generator : ${this}
+# user      : $(id)
+# uname     : $(uname -a)
+# date      : $(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
 EOF
 
-info "installing /etc/ros/rosdep/sources.list.d/00-realsense.list"
-mkdir -vp /etc/ros/rosdep/sources.list.d/
-cat >/etc/ros/rosdep/sources.list.d/00-realsense.list <<'EOF'
-yaml file:///srv/realsense.yaml
+while read realsense_package; do
+    cat >>"${realsense_yaml}" <<EOF
+${realsense_package}:
+  ubuntu: [${realsense_package}]
+EOF
+done <"${realsense_package_list}"
+
+readonly realsense_list="/etc/ros/rosdep/sources.list.d/00-realsense.list"
+info "generating ${realsense_list}"
+mkdir -vp "$(dirname "${realsense_list}")"
+cat >"${realsense_list}" <<EOF
+# ${realsense_list}
+#
+# THIS IS A GENERATED FILE
+# generator : ${this}
+# user      : $(id)
+# uname     : $(uname -a)
+# date      : $(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
+yaml file://${realsense_yaml}
 EOF
