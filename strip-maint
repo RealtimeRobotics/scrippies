@@ -22,7 +22,7 @@ die() {
 
 cleanup() {
     status="$?"
-    rm -rf control.tar.gz "${tmpdir}"
+    rm -rf "${control_tar:-}" "${tmpdir}"
     return "${status}"
 }
 
@@ -95,18 +95,35 @@ if ! [ -f "${deb_file}" ]; then
     die "missing file: ${deb_file}"
 fi
 
-info "extracting control.tar.gz from ${deb_file}"
-ar -vx "${deb_file}" control.tar.gz
+# > The second required member is named control.tar. It is a tar archive
+# > containing the package control information, either not compressed
+# > (supported since dpkg 1.17.6), or compressed with gzip (with .gz extension)
+# > or xz (with .xz extension, supported since 1.17.6), as a series of plain
+# > files, of which the file control is mandatory and contains the core control
+# > information, the conffiles, triggers, shlibs and symbols files contain
+# > optional control information, and the preinst, postinst, prerm and postrm
+# > files are optional maintainer scripts. The control tarball may optionally
+# > contain an entry for ‘.’, the current directory.
+#
+# -- https://manpages.debian.org/unstable/dpkg-dev/deb.5.en.html
+
+if ! control_tar="$(ar -t "${deb_file}" | grep -E '^control\.tar(\.(gz|xz))?$')"; then
+    die "missing control tarball: ${deb_file}"
+fi
+readonly control_tar="${control_tar}"
+
+info "extracting from ${deb_file}: ${control_tar}"
+ar -vx "${deb_file}" "${control_tar}"
 
 readonly control_dir="$(mktemp -dt "$(basename "${deb_file}").control.dir.XXXXXX")"
-info "extracting control.tar.gz to ${control_dir}"
-tar -vxzf control.tar.gz -C "${control_dir}"
+info "extracting ${control_tar} to ${control_dir}"
+tar -vxf "${control_tar}" -C "${control_dir}"
 
 info "finding maintainer scripts in ${control_dir}"
 readonly maint_script_list="$(mktemp -t maint.script.list.XXXXXX)"
 find "${control_dir}" -type f -perm /111 \
-     -regextype posix-extended -regex "${control_dir}/(pre|post)(inst|rm)" \
-     -print >"${maint_script_list}"
+    -regextype posix-extended -regex "${control_dir}/(pre|post)(inst|rm)" \
+    -print >"${maint_script_list}"
 
 if ! [ -s "${maint_script_list}" ]; then
     info "no maintainer scripts found, skipping ${deb_file}"
@@ -132,10 +149,15 @@ EOF
     fi
 done <"${maint_script_list}"
 
-info "rebuilding control.tar.gz"
-tar -vczf control.tar.gz -C "${control_dir}" .
+info "rebuilding ${control_tar}"
+case "${control_tar}" in
+    control.tar) tar -vcf "${control_tar}" -C "${control_dir}" . ;;
+    control.tar.gz) tar -vczf "${control_tar}" -C "${control_dir}" . ;;
+    control.tar.xz) tar -vcJf "${control_tar}" -C "${control_dir}" . ;;
+    *) die "unrecognized control tarball: ${control_tar}" ;;
+esac
 
-info "replacing control.tar.gz within ${deb_file}"
-ar -vr "${deb_file}" control.tar.gz
+info "replacing ${control_tar} within ${deb_file}"
+ar -vr "${deb_file}" "${control_tar}"
 
 exit "$?"
