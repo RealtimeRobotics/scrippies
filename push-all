@@ -74,6 +74,7 @@ sort -uo "${remote_list}" "${remote_list}"
 readonly branch_list="$(mktemp -t branch.list.XXXXXX)"
 git -C "${workdir}" branch -a \
     | sed -nr 's|^  remotes/[^/]+/([[:graph:]]+)$|\1|gp' >"${branch_list}"
+sort -uo "${branch_list}" "${branch_list}"
 
 while read remote; do
     while read branch; do
