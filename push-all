@@ -22,7 +22,7 @@ die() {
 
 cleanup() {
     status="$?"
-    rm -rf control.tar.gz "${tmpdir}"
+    rm -rf "${tmpdir}"
     return "${status}"
 }
 
