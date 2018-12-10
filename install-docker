@@ -1,0 +1,44 @@
+#!/bin/sh
+
+# scrippies/install-docker
+
+# https://docs.docker.com/cs-engine/1.13/#install-on-ubuntu-1404-lts-or-1604-lts
+#
+# https://medium.com/devgorilla/how-to-install-docker-on-ubuntu-18-04-495216a16092
+
+set -euvx
+
+# Install packages to allow apt to use a repository over HTTPS:
+sudo find /var/lib/apt/lists -mindepth 1 -delete
+sudo apt-get -y update
+sudo apt-get -y install --no-install-recommends \
+     apt-transport-https \
+     curl \
+     lsb-release \
+     software-properties-common
+
+readonly docker_gpg="$(mktemp -t docker.gpg.XXXXXX)"
+readonly docker_list="$(mktemp -t docker.list.XXXXXX)"
+
+curl -fsSL 'https://download.docker.com/linux/ubuntu/gpg' >"${docker_gpg}"
+tee >"${docker_list}" <<EOF
+deb [arch=$(dpkg --print-architecture)] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable edge
+EOF
+
+sudo apt-key add "${docker_gpg}"
+sudo cp -v "${docker_list}" /etc/apt/sources.list.d/docker.list
+sudo chmod 0644 /etc/apt/sources.list.d/docker.list
+
+sudo apt-get -y update
+sudo apt-cache policy docker-ce
+sudo apt-get -y install docker-ce
+
+sudo service docker start && \
+    echo "docker start win" || \
+    echo "docker start fail"
+
+sudo usermod -aG docker $(whoami)
+sudo docker run hello-world
+newgrp - docker <<EOF
+docker run --rm -i hello-world
+EOF
