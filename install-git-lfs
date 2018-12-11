@@ -1,0 +1,92 @@
+#!/bin/sh
+
+# scrippies/install-git-lfs
+
+set -euvx
+
+readonly this="$(readlink -f "$0")"
+readonly here="$(dirname "${this}")"
+readonly whatami="$(basename "${here}").$(basename "${this}")"
+readonly tmpdir="$(mktemp -dt "${whatami}.XXXXXX")"
+
+readonly default_prefix="/usr/local"
+
+log() { echo "${whatami}[$$]: $@" >&2; }
+error() { log "ERROR: $@"; }
+warning() { log "WARNING: $@"; }
+info() { log "INFO: $@"; }
+
+die() {
+    error "$@"
+    usage >&2
+    exit 1
+}
+
+cleanup() {
+    status="$?"
+    rm -rf "${tmpdir}"
+    return "${status}"
+}
+
+usage() {
+    cat <<EOF
+Usage: $(basename ${this}) [OPTION]...
+Install git-lfs.
+
+Options:
+    -h           print usage and exit
+    -P PREFIX    override installation prefix (default: ${default_prefix})
+
+Examples:
+
+    \$ ./$(basename ${this})
+
+    \$ ./$(basename ${this}) -P /usr/local
+
+    \$ PREFIX=/usr/local ./$(basename ${this})
+
+EOF
+}
+
+################################################################################
+
+trap cleanup EXIT
+export TMPDIR="${tmpdir}"
+export LC_ALL=C
+
+while getopts ":hP:" opt; do
+    case "${opt}" in
+        h)
+            usage
+            exit 0
+            ;;
+        P) readonly prefix="${OPTARG}" ;;
+        :) die "missing argument: -${OPTARG}" ;;
+        \?) die "bad option: -${OPTARG}" ;;
+    esac
+done
+shift "$((${OPTIND} - 1))"
+
+if ! [ -n "${prefix:-}" ]; then
+    if [ -n "${PREFIX:-}" ]; then
+        readonly prefix="${PREFIX}"
+    else
+        readonly prefix="${default_prefix}"
+    fi
+fi        
+info "installation prefix: ${prefix}"
+
+readonly latest="$(mktemp -t latest.XXXXXX)"
+curl -fsSL https://api.github.com/repos/github/git-lfs/releases/latest >"${latest}"
+
+readonly download_urls="$(mktemp -t download.urls.XXXXXX)"
+grep 'browser_download_url' "${latest}" >"${download_urls}"
+
+readonly download_url="$(grep 'linux-amd64' "${download_urls}" | cut -d\" -f4)"
+readonly tarball="$(mktemp -t "$(basename "${download_url}").XXXXXX")"
+curl -fsSLo "${tarball}" "${download_url}"
+mkdir -vp "${prefix}/bin"
+tar -C "${prefix}/bin" -xf "${tarball}" git-lfs
+file "${prefix}/bin/git-lfs"
+
+exit "$?"
