@@ -63,8 +63,9 @@ shift "$((${OPTIND} - 1))"
 info "discovering realsense packages"
 readonly realsense_package_list="$(mktemp -t realsense.package.list.XXXXXX)"
 find /var/lib/apt/lists -type f \
-     -a \( -name 'realsense*_Packages.gz'  -exec gzip  -dc {} \; \) \
+     -a \( -name 'realsense*_Packages'     -exec cat       {} \; \) \
      -o \( -name 'realsense*_Packages.bz2' -exec bzip2 -dc {} \; \) \
+     -o \( -name 'realsense*_Packages.gz'  -exec gzip  -dc {} \; \) \
      -o \( -name 'realsense*_Packages.lz4' -exec lz4   -dc {} \; \) \
      -o \( -name 'realsense*_Packages.xz'  -exec xz    -dc {} \; \) \
     | sed -nr 's|^Package:[[:space:]]+([[:graph:]]+).*$|\1|gp' \
