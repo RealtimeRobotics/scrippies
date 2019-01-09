@@ -10,6 +10,7 @@ readonly whatami="$(basename "${here}").$(basename "${this}")"
 readonly tmpdir="$(mktemp -dt "${whatami}.XXXXXX")"
 
 readonly default_distribution="xenial"
+readonly default_download_dir="/dev/null"
 
 log() { echo "${whatami}[$$]: $@" >&2; }
 error() { log "ERROR: $@"; }
@@ -39,6 +40,7 @@ Notes:
 Options:
     -h                 print this usage and return success
     -D DISTRIBUTION    override distribution (default: ${default_distribution})
+    -d DOWNLOAD_DIR    also apt-get download to DOWNLOAD_DIR
 
 Examples:
 
@@ -102,6 +104,13 @@ EOF
     sed -nri '/^[[:alnum:]][[:alnum:].+-]+$/p' "${depends_list}"
     sort -uo "${depends_list}" "${depends_list}"
     cat <"${depends_list}"
+
+    if [ -d "${download_dir}" ]; then
+        (
+            cd "${download_dir}"
+            xargs apt-get download <"${depends_list}"
+        )
+    fi
 }
 
 run_dockerized() {
@@ -118,16 +127,17 @@ run_dockerized() {
         --env DISTRIBUTION="${distribution}" \
         --env DOCKER_HOST_GID="$(id -g)" \
         --env DOCKER_HOST_UID="$(id -u)" \
+        --env DOWNLOAD_DIR="${download_dir}" \
         --env HERE="${here}" \
         --env THIS="${this}" \
         --env WORKDIR="${workdir}" \
         --interactive \
         --mount type=bind,readonly,source="${here}",target="${here}" \
         --mount type=bind,readonly,source="${workdir}",target="${workdir}" \
+        --mount type=bind,source="${download_dir}",target="${download_dir}" \
         --rm \
         --workdir "${workdir}" \
-        "${image_name}" \
-        sh <<'EOF'
+        "${image_name}" sh <<'EOF'
 set -euvx
 apt-get -y update
 apt-get -y --no-install-recommends install dpkg-dev
@@ -141,7 +151,7 @@ useradd \
     -s "$(command -v sh)" \
     luser
 
-nice -n19 su -c "${THIS} -r -D ${DISTRIBUTION} ${WORKDIR}" luser
+nice -n19 su -c "${THIS} -r -D ${DISTRIBUTION} -d ${DOWNLOAD_DIR} ${WORKDIR}" luser
 EOF
 }
 
@@ -151,7 +161,7 @@ trap cleanup EXIT
 export TMPDIR="${tmpdir}"
 export LC_ALL=C
 
-while getopts ":hrD:" opt; do
+while getopts ":hrD:d:" opt; do
     case "${opt}" in
         h)
             usage
@@ -159,6 +169,15 @@ while getopts ":hrD:" opt; do
             ;;
         r) readonly run_raw="true" ;;
         D) readonly distribution="${OPTARG}" ;;
+        d)
+            if ! download_dir="$(readlink -f "${OPTARG}")"; then
+                warning "missing: ${OPTARG}"
+            fi
+            if ! [ -d "${download_dir}" ]; then
+                warning "not a directory: ${download_dir}"
+            fi
+            readonly download_dir="${download_dir}"
+            ;;
         :) die "missing argument: -${OPTARG}" ;;
         \?) die "bad option: -${OPTARG}" ;;
     esac
@@ -189,6 +208,13 @@ if [ -n "${distribution:-}" ]; then
 else
     readonly distribution="${default_distribution}"
     warning "defaulting distribution: ${distribution}"
+fi
+
+if [ -n "${download_dir:-}" ]; then
+    info "download_dir: ${download_dir}"
+else
+    readonly download_dir="${default_download_dir}"
+    warning "defaulting download_dir: ${download_dir}"
 fi
 
 if [ "true" = "${run_raw:-false}" ]; then
