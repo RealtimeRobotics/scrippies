@@ -1,0 +1,200 @@
+#!/bin/sh
+
+# scrippies/ls-deps
+
+set -eu
+
+readonly this="$(readlink -f "$0")"
+readonly here="$(dirname "${this}")"
+readonly whatami="$(basename "${here}").$(basename "${this}")"
+readonly tmpdir="$(mktemp -dt "${whatami}.XXXXXX")"
+
+readonly default_distribution="xenial"
+
+log() { echo "${whatami}[$$]: $@" >&2; }
+error() { log "ERROR: $@"; }
+warning() { log "WARNING: $@"; }
+info() { log "INFO: $@"; }
+
+die() {
+    error "$@"
+    usage >&2
+    exit 1
+}
+
+cleanup() {
+    status="$?"
+    rm -rf "${tmpdir}"
+    return "${status}"
+}
+
+usage() {
+    cat <<EOF
+Usage: $(basename ${this}) [OPTION]... [WORKDIR]
+List recursive dependencies for all debian packages in given directory.
+
+Notes:
+    WORKDIR defaults to \$PWD
+
+Options:
+    -h                 print this usage and return success
+    -D DISTRIBUTION    override distribution (default: ${default_distribution})
+
+Examples:
+
+    \$ $(basename ${this})
+
+    \$ $(basename ${this}) \$PWD
+
+    \$ $(basename ${this}) -D xenial \$PWD
+
+EOF
+}
+
+run_raw() {
+    # make a fake apt configuration that a luser can work
+    readonly fake_apt_dir="$(mktemp -dt fake_apt_dir.XXXXXX)"
+    tar -cf- -C / etc/apt var/lib/apt var/cache/apt | tar -xf- -C "${fake_apt_dir}"
+    export APT_CONFIG="${fake_apt_dir}/etc/apt/apt.conf"
+    cat >"${APT_CONFIG}" <<EOF
+Dir "${fake_apt_dir}";
+EOF
+
+    # make a fake apt repo from the contents of the workdir
+    readonly fake_apt_repo="$(mktemp -dt fake_apt_repo.XXXXXX)"
+    (
+        cd "${fake_apt_repo}"
+        tar -cf- -C "${workdir}" . | tar -xf-
+        dpkg-scanpackages --multiversion . >Packages
+        dpkg-scansources . >Sources
+        cat >"${fake_apt_dir}/etc/apt/sources.list.d/$(echo "${PWD}" | tr -s '/' '_').list" <<EOF
+deb     [trusted=yes] file://${PWD} ./
+deb-src [trusted=yes] file://${PWD} ./
+EOF
+    )
+
+    # construct the list of scanned packages
+    readonly package_list="$(mktemp -t package_list.XXXXXX)"
+    sed -nr 's|^Package: (.*)$|\1|gp' "${fake_apt_repo}/Packages" >"${package_list}"
+
+    # from the list of scanned packages, enumerate recursive dependencies
+    # https://stackoverflow.com/questions/22008193/how-to-list-download-the-recursive-dependencies-of-a-debian-package/41428445#41428445
+    readonly depends_list="$(mktemp -t depends_list.XXXXXX)"
+    apt-get -y update >&2
+    sed -nr 's|^Package: (.*)$|\1|gp' "${fake_apt_repo}/Packages" \
+        | xargs apt-cache depends \
+                --recurse \
+                --no-recommends \
+                --no-suggests \
+                --no-conflicts \
+                --no-breaks \
+                --no-replaces \
+                --no-enhances \
+                --no-pre-depends \
+                <"${package_list}" >"${depends_list}"
+
+    # > Package names (both source and binary, see Package) must consist only
+    # > of lower case letters (a-z), digits (0-9), plus (+) and minus (-)
+    # > signs, and periods (.). They must be at least two characters long and
+    # > must start with an alphanumeric character.
+    #
+    # https://www.debian.org/doc/debian-policy/ch-controlfields.html#source
+    sed -nri '/^[[:alnum:]][[:alnum:].+-]+$/p' "${depends_list}"
+    sort -uo "${depends_list}" "${depends_list}"
+    cat <"${depends_list}"
+}
+
+run_dockerized() {
+    readonly image_name="ubuntu:${distribution}"
+    if [ "true" = "${DOCKER_IMAGE_PULL:-false}" ]; then
+        docker image pull "${image_name}"
+    else
+        warning "skipping: docker image pull ${image_name}"
+    fi
+
+    docker container run \
+           --env DEBCONF_NONINTERACTIVE_SEEN=true \
+           --env DEBIAN_FRONTEND=noninteractive \
+           --env DISTRIBUTION="${distribution}" \
+           --env DOCKER_HOST_GID="$(id -g)" \
+           --env DOCKER_HOST_UID="$(id -u)" \
+           --env HERE="${here}" \
+           --env THIS="${this}" \
+           --env WORKDIR="${workdir}" \
+           --interactive \
+           --mount type=bind,readonly,source="${here}",target="${here}" \
+           --mount type=bind,readonly,source="${workdir}",target="${workdir}" \
+           --rm \
+           --workdir "${workdir}" \
+           "${image_name}" \
+           sh <<'EOF'
+set -euvx
+apt-get -y update
+apt-get -y --no-install-recommends install dpkg-dev
+"${HERE}/configure-apt" "${DISTRIBUTION}"
+
+groupadd -g "${DOCKER_HOST_GID}" luser
+useradd \
+    -d $(mktemp -dt home.luser.XXXXXX) \
+    -g "${DOCKER_HOST_GID}" \
+    -s "$(command -v sh)" \
+    -u "${DOCKER_HOST_UID}" \
+    luser
+
+nice -n19 su -c "${THIS} -r -D ${DISTRIBUTION} ${WORKDIR}" luser
+EOF
+}
+
+################################################################################
+
+trap cleanup EXIT
+export TMPDIR="${tmpdir}"
+export LC_ALL=C
+
+while getopts ":hrD:" opt; do
+    case "${opt}" in
+        h)
+            usage
+            exit 0
+            ;;
+        r) readonly run_raw="true" ;;
+        D) readonly distribution="${OPTARG}";;
+        :) die "missing argument: -${OPTARG}" ;;
+        \?) die "bad option: -${OPTARG}" ;;
+    esac
+done
+shift "$((${OPTIND} - 1))"
+
+case "$#" in
+    0)
+        readonly workdir="${PWD}"
+        warning "defaulting workdir: ${workdir}"
+        ;;
+    1)
+        if ! workdir="$(readlink -f "$1")"; then
+            die "missing: $1"
+        fi
+        if ! [ -d "${workdir}" ]; then
+            die "not a directory: ${workdir}"
+        fi
+        readonly workdir="${workdir}"
+        ;;
+    *)
+        die "bad args"
+        ;;
+esac
+
+if [ -n "${distribution:-}" ]; then
+    info "distribution: ${distribution}"
+else
+    readonly distribution="${default_distribution}"
+    warning "defaulting distribution: ${distribution}"
+fi
+
+if [ "true" = "${run_raw:-false}" ]; then
+    run_raw
+else
+    run_dockerized
+fi
+
+exit "$?"
