@@ -83,15 +83,15 @@ EOF
     apt-get -y update >&2
     sed -nr 's|^Package: (.*)$|\1|gp' "${fake_apt_repo}/Packages" \
         | xargs apt-cache depends \
-                --recurse \
-                --no-recommends \
-                --no-suggests \
-                --no-conflicts \
-                --no-breaks \
-                --no-replaces \
-                --no-enhances \
-                --no-pre-depends \
-                <"${package_list}" >"${depends_list}"
+            --recurse \
+            --no-recommends \
+            --no-suggests \
+            --no-conflicts \
+            --no-breaks \
+            --no-replaces \
+            --no-enhances \
+            --no-pre-depends \
+            <"${package_list}" >"${depends_list}"
 
     # > Package names (both source and binary, see Package) must consist only
     # > of lower case letters (a-z), digits (0-9), plus (+) and minus (-)
@@ -113,21 +113,21 @@ run_dockerized() {
     fi
 
     docker container run \
-           --env DEBCONF_NONINTERACTIVE_SEEN=true \
-           --env DEBIAN_FRONTEND=noninteractive \
-           --env DISTRIBUTION="${distribution}" \
-           --env DOCKER_HOST_GID="$(id -g)" \
-           --env DOCKER_HOST_UID="$(id -u)" \
-           --env HERE="${here}" \
-           --env THIS="${this}" \
-           --env WORKDIR="${workdir}" \
-           --interactive \
-           --mount type=bind,readonly,source="${here}",target="${here}" \
-           --mount type=bind,readonly,source="${workdir}",target="${workdir}" \
-           --rm \
-           --workdir "${workdir}" \
-           "${image_name}" \
-           sh <<'EOF'
+        --env DEBCONF_NONINTERACTIVE_SEEN=true \
+        --env DEBIAN_FRONTEND=noninteractive \
+        --env DISTRIBUTION="${distribution}" \
+        --env DOCKER_HOST_GID="$(id -g)" \
+        --env DOCKER_HOST_UID="$(id -u)" \
+        --env HERE="${here}" \
+        --env THIS="${this}" \
+        --env WORKDIR="${workdir}" \
+        --interactive \
+        --mount type=bind,readonly,source="${here}",target="${here}" \
+        --mount type=bind,readonly,source="${workdir}",target="${workdir}" \
+        --rm \
+        --workdir "${workdir}" \
+        "${image_name}" \
+        sh <<'EOF'
 set -euvx
 apt-get -y update
 apt-get -y --no-install-recommends install dpkg-dev
@@ -158,7 +158,7 @@ while getopts ":hrD:" opt; do
             exit 0
             ;;
         r) readonly run_raw="true" ;;
-        D) readonly distribution="${OPTARG}";;
+        D) readonly distribution="${OPTARG}" ;;
         :) die "missing argument: -${OPTARG}" ;;
         \?) die "bad option: -${OPTARG}" ;;
     esac
