@@ -88,7 +88,6 @@ EOF
     # construct the list of scanned packages
     readonly fake_apt_repo="${here}"
     readonly package_list="$(mktemp -t package_list.XXXXXX)"
-    ls -lah
     sed -nr 's|^Package: (.*)$|\1|gp' "${fake_apt_repo}/Packages" >"${package_list}"
 
     # create and populate the sources list file
@@ -98,13 +97,19 @@ EOF
 deb [trusted=yes] file://${here} ./
 EOF
 
-    # install all packages held by the fake repo
+    # update apt to make it aware of the new fake repo
     apt-get -y update
-    xargs apt-get \
-        --yes \
-        --no-install-recommends \
-        --verbose-versions install \
-        <"${package_list}"
+
+    # if install-list.txt exists, then install those; else install everything
+    if [ -f "${here}/install-list.txt" ]; then
+        cat "${here}/install-list.txt"
+    else
+        cat "${package_list}"
+    fi | xargs apt-get \
+               --yes \
+               --no-install-recommends \
+               --verbose-versions \
+               install
 }
 
 ################################################################################
