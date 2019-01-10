@@ -1,0 +1,161 @@
+#!/bin/sh
+
+# scrippies/mkmegadeb
+
+set -euvx
+
+readonly this="$(readlink -f "$0")"
+readonly here="$(dirname "${this}")"
+readonly whatami="$(basename "${here}").$(basename "${this}")"
+readonly tmpdir="$(mktemp -dt "${whatami}.XXXXXX")"
+
+readonly default_distribution="xenial"
+
+log() { echo "${whatami}[$$]: $@" >&2; }
+error() { log "ERROR: $@"; }
+warning() { log "WARNING: $@"; }
+info() { log "INFO: $@"; }
+
+die() {
+    error "$@"
+    usage >&2
+    exit 1
+}
+
+cleanup() {
+    status="$?"
+    rm -rf "${tmpdir}"
+    return "${status}"
+}
+
+usage() {
+    cat <<EOF
+Usage: $(basename ${this}) [OPTION]... [WORKDIR]
+Create megadeb from all debian packages in current working directory.
+
+Notes:
+    WORKDIR defaults to \$PWD
+
+Options:
+    -h                 print this usage and return success
+    -C WORKDIR         run as if started in WORKDIR
+    -D DISTRIBUTION    override distribution (default: ${default_distribution})
+    -o DEB_RUN         output to DEB_RUN (default: \$WORKDIR.deb.run)
+
+Examples:
+
+    \$ $(basename ${this})
+
+    \$ $(basename ${this}) \$PWD
+
+    \$ $(basename ${this}) -D xenial \$PWD
+
+EOF
+}
+
+build_megadeb() {
+    # create and populate makeself archive dir
+    readonly makeself_archive_dir="$(mktemp -dt makeself_archive_dir.XXXXXX)"
+    tar -C "${workdir}" -cf- . | tar -C "${makeself_archive_dir}" -xf-
+    cp -v "${this}" "${makeself_archive_dir}/$(basename "${this}")"
+
+    if [ -n "${makeself_file_name:-}" ]; then
+        info "makeself_file_name: ${makeself_file_name}"
+    else
+        readonly makeself_file_name="${workdir}.deb.run"
+        warning "defaulting makeself_file_name: ${makeself_file_name}"
+    fi
+
+    "${here}/mkself" \
+        --nocomp \
+        "${makeself_archive_dir}" \
+        "${makeself_file_name}" \
+        "MegaDeb" \
+        "./$(basename "${this}")" -r
+}
+
+run_megadeb() {
+    env | sort
+
+    # make a fake apt configuration that a luser can work
+    readonly fake_apt_dir="$(mktemp -dt fake_apt_dir.XXXXXX)"
+    tar -cf- -C / etc/apt var/lib/apt var/cache/apt var/log/apt | tar -xf- -C "${fake_apt_dir}"
+    export APT_CONFIG="${fake_apt_dir}/etc/apt/apt.conf"
+    cat >"${APT_CONFIG}" <<EOF
+Dir "${fake_apt_dir}";
+EOF
+
+    # construct the list of scanned packages
+    readonly fake_apt_repo="${here}"
+    readonly package_list="$(mktemp -t package_list.XXXXXX)"
+    ls -lah
+    sed -nr 's|^Package: (.*)$|\1|gp' "${fake_apt_repo}/Packages" >"${package_list}"
+
+    # create and populate the sources list file
+    readonly this_list="$(mktemp -u "${fake_apt_dir}/etc/apt/sources.list.d/$(basename "${this}").XXXXXX").list"
+    mkdir -vp "$(dirname "${this_list}")"
+    cat >"${this_list}" <<EOF
+deb [trusted=yes] file://${here} ./
+EOF
+
+    # install all packages held by the fake repo
+    apt-get -y update
+    xargs apt-get \
+          --yes \
+          --no-install-recommends \
+          --verbose-versions install \
+          <"${package_list}"
+}
+
+################################################################################
+
+trap cleanup EXIT
+export TMPDIR="${tmpdir}"
+export LC_ALL=C
+export DEBIAN_FRONTEND=noninteractive DEBCONF_NONINTERACTIVE_SEEN=true
+
+while getopts ":hrC:D:o:" opt; do
+    case "${opt}" in
+        h)
+            usage
+            exit 0
+            ;;
+        r) readonly run_megadeb="true" ;;
+        C)
+            if ! workdir="$(readlink -f "${OPTARG}")"; then
+                die "missing: ${OPTARG}"
+            fi
+            if ! [ -d "${workdir}" ]; then
+                die "not a directory: ${workdir}"
+            fi
+            readonly workdir="${workdir}"
+            ;;
+        D) readonly distribution="${OPTARG}";;
+        o) readonly makeself_file_name="${OPTARG}" ;;
+        :) die "missing argument: -${OPTARG}" ;;
+        \?) die "bad option: -${OPTARG}" ;;
+    esac
+done
+shift "$((${OPTIND} - 1))"
+
+if [ -n "${distribution:-}" ]; then
+    info "distribution: ${distribution}"
+else
+    readonly distribution="${default_distribution}"
+    warning "defaulting distribution: ${distribution}"
+fi
+
+if [ -n "${workdir:-}" ]; then
+    info "workdir: ${workdir}"
+else
+    readonly workdir="${PWD}"
+    warning "defaulting workdir: ${workdir}"
+fi
+
+if [ "true" = "${run_megadeb:-false}" ]; then
+    run_megadeb
+else
+    build_megadeb
+fi
+
+exit "$?"
