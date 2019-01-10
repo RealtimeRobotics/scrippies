@@ -101,10 +101,10 @@ EOF
     # install all packages held by the fake repo
     apt-get -y update
     xargs apt-get \
-          --yes \
-          --no-install-recommends \
-          --verbose-versions install \
-          <"${package_list}"
+        --yes \
+        --no-install-recommends \
+        --verbose-versions install \
+        <"${package_list}"
 }
 
 ################################################################################
@@ -130,7 +130,7 @@ while getopts ":hrC:D:o:" opt; do
             fi
             readonly workdir="${workdir}"
             ;;
-        D) readonly distribution="${OPTARG}";;
+        D) readonly distribution="${OPTARG}" ;;
         o) readonly makeself_file_name="${OPTARG}" ;;
         :) die "missing argument: -${OPTARG}" ;;
         \?) die "bad option: -${OPTARG}" ;;
