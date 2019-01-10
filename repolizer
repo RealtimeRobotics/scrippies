@@ -75,7 +75,7 @@ EOF
     # https://stackoverflow.com/questions/22008193/how-to-list-download-the-recursive-dependencies-of-a-debian-package/41428445#41428445
     readonly depends_list="$(mktemp -t depends_list.XXXXXX)"
     apt-get -y update >&2
-    sed -nr 's|^Package: (.*)$|\1|gp' "${fake_apt_repo}/Packages" \
+    sed -nr 's|^Package: (.*)$|\1|gp' "${workdir}/Packages" \
         | xargs apt-cache depends \
             --recurse \
             --no-recommends \
