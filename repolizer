@@ -49,6 +49,45 @@ Examples:
 EOF
 }
 
+# $1 : start node
+# $2 : edge list
+traverse() {
+    if grep -q "^$1" <"$2"; then
+        grep "^$1" <"$2" | while read curr next; do
+            traverse "${next}" "$2"
+        done
+    else
+        echo "$1"
+    fi
+}
+
+# Kosaraju's algorithm for finding strongly connected components
+#
+# $1 : adjacency list of edges
+kosaraju_scc() {
+    readonly edges="$(mktemp -t edges.XXXXXX)"
+    cat >"${edges}" <"${1:-/dev/stdin}"
+
+    # create the topological sort; save stderr to find cycles
+    readonly tsort_out="$(mktemp -t tsort_out.XXXXXX)"
+    readonly tsort_err="$(mktemp -t tsort_err.XXXXXX)"
+    tsort <"${edges}" >"${tsort_out}" 2>"${tsort_err}" || true
+
+    # remove edges that comprise cycles
+    sed -nr 's|^tsort: ([[:graph:]]+)$|\1|gp' "${tsort_err}" \
+        | xargs -I{} sed -i "/^{}/d" "${edges}"
+    
+    # transpose edges to create reverse edges
+    readonly redges="$(mktemp -t redges.XXXXXX)"
+    sed -r 's|^([[:graph:]]+)([[:space:]]+)([[:graph:]]+)$|\3\2\1|g' <"${edges}" >"${redges}"
+    
+    # in topological order, traverse the graph of reversed edges; print every
+    # dead end
+    while read pkg; do
+        traverse "${pkg}" "${redges}";
+    done <"${tsort_out}" | sort -u
+}
+
 run_raw() {
     # make a fake apt configuration that a luser can work
     readonly fake_apt_dir="$(mktemp -dt fake_apt_dir.XXXXXX)"
@@ -67,7 +106,7 @@ deb     [trusted=yes] file://${PWD} ./
 EOF
     )
 
-    # construct the list of scanned packages
+    # enumerate the list of scanned packages
     readonly package_list="$(mktemp -t package_list.XXXXXX)"
     sed -nr 's|^Package: (.*)$|\1|gp' "${workdir}/Packages" >"${package_list}"
 
@@ -95,12 +134,30 @@ EOF
     # https://www.debian.org/doc/debian-policy/ch-controlfields.html#source
     sed -nri '/^[[:alnum:]][[:alnum:].+-]+$/p' "${depends_list}"
     sort -uo "${depends_list}" "${depends_list}"
-    cat <"${depends_list}"
 
     (
         cd "${workdir}"
         xargs apt-get download <"${depends_list}"
+
+        # again, because we (may) have added packages
+        dpkg-scanpackages --multiversion . >Packages
     )
+
+    # re-enumerate the scanned packages
+    sed -nr 's|^Package: (.*)$|\1|gp' "${workdir}/Packages" >"${package_list}"
+
+    # generate the dependency graph
+    readonly depend_edges="$(mktemp -t depend_edges.XXXXXX)"
+    while read pkg; do
+        apt-cache depends "${pkg}" \
+            | sed -nr 's|^  Depends: (.*)$|\1|gp' \
+            | while read dep; do
+            echo "${pkg} ${dep}"
+        done
+    done <"${package_list}" >"${depend_edges}"
+
+    # generate the list of "strongly connected component" packages
+    kosaraju_scc <"${depend_edges}" >"${workdir}/install-list.txt"
 }
 
 run_dockerized() {
