@@ -16,6 +16,32 @@ error() { log "ERROR: $@"; }
 warning() { log "WARNING: $@"; }
 info() { log "INFO: $@"; }
 
+#############################
+# RE: SHELL KEYWORD `local` #
+#############################
+#
+# > [variable scope limiting] is normally done with the local keyword, which is
+# > ... not defined by POSIX.
+#
+# > However, even the most primitive POSIX-compliant shell I know of which is
+# > used by some GNU/Linux distributions as the /bin/sh default, dash (Debian
+# > Almquist Shell), supports it. FreeBSD and NetBSD use ash, the original
+# > Almquist Shell, which also supports it. OpenBSD uses a ksh implementation
+# > for /bin/sh which also supports it.
+#
+# https://stackoverflow.com/questions/18597697/posix-compliant-way-to-scope-variables-to-a-function-in-a-shell-script/18600920#18600920
+
+############################
+# RE: DEBIAN PACKAGE NAMES #
+############################
+#
+# > Package names (both source and binary, see Package) must consist only
+# > of lower case letters (a-z), digits (0-9), plus (+) and minus (-)
+# > signs, and periods (.). They must be at least two characters long and
+# > must start with an alphanumeric character.
+#
+# https://www.debian.org/doc/debian-policy/ch-controlfields.html#source
+
 die() {
     error "$@"
     usage >&2
@@ -23,7 +49,7 @@ die() {
 }
 
 cleanup() {
-    status="$?"
+    local status="$?"
     rm -rf "${tmpdir}"
     return "${status}"
 }
@@ -53,142 +79,238 @@ EOF
 # $2 : edge list
 # $3 : result list
 traverse() {
-    # if $1 is already a result, then return
-    if grep -q "$1" "$3"; then
+    # if $1 is already a result, then do nothing and return
+    if grep -qE "^$1$" "$3"; then
         return
     fi
 
-    # look for edges starting at $1
-    edges="$(mktemp -t "edges_$1.XXXXXX")"
-    grep "^$1" <"$2" >"${edges}"
-
-    # if no edges starting at $1, then add $1 to results and return
-    if ! [ -s "${edges}" ]; then
+    # look for edges starting at $1: if none, then add $1 to results and return
+    if [ -n "$(sed -nr "/^$1\t[[:graph:]]+$/p" "$2")" ]; then
         echo "$1" >>"$3"
         return
     fi
 
-    while read curr next; do
+    # else, process each edge
+    sed -nr "/^$1\t[[:graph:]]+$/p" "$2" | while read curr next; do
         traverse "${next}" "$2" "$3"
-    done <"${edges}"
+    done
 }
 
 # Kosaraju's algorithm for finding strongly connected components
 #
 # $1 : adjacency list of edges
 kosaraju_scc() {
-    edges="$(mktemp -t edges.XXXXXX)"
-    cat >"${edges}" <"${1:-/dev/stdin}"
+    # vet given edges file
+    if ! [ -n "${1:-}" ]; then
+        error "bad args"
+        return 1
+    fi
+    if ! [ -f "$1" ]; then
+        error "missing file: $1"
+        return 1
+    fi
+    if ! [ -s "$1" ]; then
+        error "empty file: $1"
+        return 1
+    fi
+    local edges="$(mktemp -t edges.XXXXXX)"
+    cp -v "$1" "${edges}"
 
     # create the topological sort; save stderr to find cycles
     tsort_out="$(mktemp -t tsort_out.XXXXXX)"
     tsort_err="$(mktemp -t tsort_err.XXXXXX)"
-    tsort <"${edges}" >"${tsort_out}" 2>"${tsort_err}" || true
+    if ! tsort <"${edges}" >"${tsort_out}" 2>"${tsort_err}"; then
+        while read tsort_err_line; do
+            warning "${tsort_err_line}"
+        done <"${tsort_err}"
+    fi
 
     # remove edges that comprise cycles
     sed -nr 's|^tsort: ([[:graph:]]+)$|\1|gp' "${tsort_err}" \
         | xargs -I{} sed -i "/^{}/d" "${edges}"
-    
+
     # transpose edges to create reverse edges
-    redges="$(mktemp -t redges.XXXXXX)"
+    local redges="$(mktemp -t redges.XXXXXX)"
     sed -r 's|^([[:graph:]]+)([[:space:]]+)([[:graph:]]+)$|\3\2\1|g' <"${edges}" >"${redges}"
-    
+
     # in topological order, traverse the graph of reversed edges; print every
     # dead end
-    res="$(mktemp -t res.XXXXXX)"
+    local dead_ends="$(mktemp -t dead_ends.XXXXXX)"
     while read pkg; do
-        traverse "${pkg}" "${redges}" "${res}";
+        traverse "${pkg}" "${redges}" "${dead_ends}"
     done <"${tsort_out}"
-    sort <"${res}"
+    cat "${dead_ends}"
+}
+
+# take a Packages, print every "Package" field
+packages2names() {
+    sed -nr \
+        's|^Package:[[:space:]]+([[:alnum:]][[:alnum:].+-]+).*$|\1|gp' \
+        "${@:-/dev/stdin}"
 }
 
 # given Packages file, print dependency edges
 #
 # $1 : Packages file
 packages2edges() {
-    # enumerate package names
-    packages="$(mktemp -t packages.XXXXXX)"
-    sed -nr 's|^Package: (.*)$|\1|gp' <"${1:-/dev/stdin}" >"${packages}"
+    # vet given Packages file
+    local packages_file="${1:-}"
+    if ! [ -n "${packages_file}" ]; then
+        error "bad args"
+        return 1
+    fi
+    if ! [ -f "${packages_file}" ]; then
+        error "missing file: ${packages_file}"
+        return 1
+    fi
+    if ! [ -s "${packages_file}" ]; then
+        error "empty file: ${packages_file}"
+        return 1
+    fi
+
+    # enumerate package names (see above re: debian package names)
+    local package_name_list="$(mktemp -t package_name_list.XXXXXX)"
+    sed -nr 's|^Package:[[:space:]]+([[:alnum:]][[:alnum:].+-]+).*$|\1|gp' \
+        <"${packages_file}" >"${package_name_list}"
+    if ! [ -s "${package_name_list}" ]; then
+        error "empty file: ${package_name_list}"
+        return 1
+    fi
 
     # enumerate recursive dependencies
     # https://stackoverflow.com/questions/22008193/how-to-list-download-the-recursive-dependencies-of-a-debian-package/41428445#41428445
-    depends="$(mktemp -t depends.XXXXXX)"
+    local apt_cache_depends="$(mktemp -t apt_cache_depends.XXXXXX)"
     xargs apt-cache depends \
-          --recurse \
-          --no-recommends \
-          --no-suggests \
-          --no-conflicts \
-          --no-breaks \
-          --no-replaces \
-          --no-enhances \
-          --no-pre-depends \
-          <"${packages}" >"${depends}"
+        --recurse \
+        --no-recommends \
+        --no-suggests \
+        --no-conflicts \
+        --no-breaks \
+        --no-replaces \
+        --no-enhances \
+        --no-pre-depends \
+        <"${package_name_list}" >"${apt_cache_depends}"
 
-    # > Package names (both source and binary, see Package) must consist only
-    # > of lower case letters (a-z), digits (0-9), plus (+) and minus (-)
-    # > signs, and periods (.). They must be at least two characters long and
-    # > must start with an alphanumeric character.
+    # From the `apt-cache depends` output, create the "depends blocks"
+    # file of the following form:
     #
-    # https://www.debian.org/doc/debian-policy/ch-controlfields.html#source
-    sed -nri \
+    #     <PKG-1>
+    #     <DEP-1-1>
+    #
+    #     <PKG-2>
+    #
+    #     <PKG-3>
+    #     <DEP-3-1>
+    #     <DEP-3-2>
+    #     ...
+    local depends_blocks="$(mktemp -t depends_blocks.XXXXXX)"
+    sed -nr \
         -e 's/^([[:alnum:]][[:alnum:].+-]+)$/\n\1/gp' \
         -e 's/^ [ |]Depends: ([[:alnum:]][[:alnum:].+-]+)$/\1/gp' \
-        "${depends}"
+        <"${apt_cache_depends}" >"${depends_blocks}"
 
-    # create adjacency list from apt-cache depends
-    adjlist="$(mktemp -t adjlist.XXXXXX)"
+    # From the depends blocks, create the adjacency list of the following form:
+    #
+    #     <PKG-1>\t<DEP-1-1>
+    #     <PKG-2>
+    #     <PKG-3>\t<DEP-3-1>\t<DEP-3-2>
+    #     ...
+    local adjlist="$(mktemp -t adjlist.XXXXXX)"
     (
         cd "$(mktemp -d)"
-        csplit -sn9 "${depends}" '/^$/' '{*}'
+        csplit -sn9 "${depends_blocks}" '/^$/' '{*}'
         find . -type f -name 'xx*' \
-             -exec sed -i '/^[[:space:]]*$/d' {} + \
-             -exec paste -s {} + \
-             >"${adjlist}"
+            -exec sed -i '/^[[:space:]]*$/d' {} + \
+            -exec paste -s {} + \
+            >"${adjlist}"
     )
     sed -i '/^[[:space:]]*$/d' "${adjlist}"
     sort -uo "${adjlist}" "${adjlist}"
 
-    # create edges from adjacency list
+    # From the adjacency list, create normalized list of partial orderings of
+    # the following form:
+    #
+    #     <PKG-1>\t<DEP-1-1>
+    #     <PKG-3>\t<DEP-3-1>
+    #     <PKG-3>\t<DEP-3-2>
+    #     ...
+    #
+    # Note that <PKG2> is absent because it has no dependencies.
+    local partords="$(mktemp -t partords.XXXXXX)"
     while read head rest; do
         # rest is empty iff head has no dependencies; no edge needed
         echo "${rest}" | tr '\t' '\n' | xargs -rI{} printf "${head}\t{}\n"
-    done <"${adjlist}"
+    done <"${adjlist}" >"${partords}"
+    sort -uo "${partords}" "${partords}"
+
+    # print partial orderings
+    cat "${partords}"
+}
+
+# for the given directory...
+#
+# * create and/or update a fake apt repository within
+#
+# * install a (deterministically) generated apt sources list file
+#
+# * update the apt configuration
+#
+# $1 : fake apt repository directory
+apt_repolize() {
+    if ! [ -n "${1:-}" ]; then
+        error "bad args"
+        return 1
+    fi
+    if ! [ -d "$1" ]; then
+        error "missing directory: $1"
+        return 1
+    fi
+    (
+        cd "$1"
+        dpkg-scanpackages --multiversion . >Packages
+        cat >"${fake_apt_dir}/etc/apt/sources.list.d/$(echo "${PWD}" | tr -s '/' '_').list" <<EOF
+deb     [trusted=yes] file://${PWD} ./
+EOF
+        apt-get -y update
+    )
 }
 
 run_raw() {
     # make a fake apt configuration that a luser can work
-    readonly fake_apt_dir="$(mktemp -dt fake_apt_dir.XXXXXX)"
+    local fake_apt_dir="$(mktemp -dt fake_apt_dir.XXXXXX)"
     tar -cf- -C / etc/apt var/lib/apt var/cache/apt | tar -xf- -C "${fake_apt_dir}"
     export APT_CONFIG="${fake_apt_dir}/etc/apt/apt.conf"
     cat >"${APT_CONFIG}" <<EOF
 Dir "${fake_apt_dir}";
 EOF
 
-    # make a fake apt repo in workdir
-    (
-        cd "${workdir}"
-        dpkg-scanpackages --multiversion . >Packages
-        cat >"${fake_apt_dir}/etc/apt/sources.list.d/$(echo "${PWD}" | tr -s '/' '_').list" <<EOF
-deb     [trusted=yes] file://${PWD} ./
-EOF
-    )
+    # create/update fake apt repo in workdir
+    apt_repolize "${workdir}"
 
-    edges="$(mktemp -t edges.XXXXXX)"
-    packages2edges <"${workdir}/Packages" >"${edges}"
+    local edges="$(mktemp -t edges.XXXXXX)"
+    packages2edges "${workdir}/Packages" >"${edges}"
     (
         cd "${workdir}"
         cut -f2 "${edges}" | xargs apt-get download
-
-        # again, because we (may) have added packages
-        dpkg-scanpackages --multiversion . >Packages
     )
+    apt_repolize "${workdir}"
 
     # TODO: FIX KOSARAJU
-    return
-    packages2edges <"${workdir}/Packages" >"${edges}"
+    packages2edges "${workdir}/Packages" >"${edges}"
 
     # generate the list of "strongly connected component" packages
-    kosaraju_scc <"${edges}" >"${workdir}/install-list.txt"
+    local scc_packages="$(mktemp -t scc_packages.XXXXXX)"
+    kosaraju_scc "${edges}" >"${scc_packages}"
+    sort -uo "${scc_packages}" "${scc_packages}"
+
+    # generate the list of all packages
+    local all_packages="$(mktemp -t all_packages.XXXXXX)"
+    packages2names "${workdir}/Packages" >"${all_packages}"
+    sort -uo "${all_packages}" "${all_packages}"
+
+    # set-subtract from all packages the scc packages to give "weakly connected
+    # component" packages; i.e., the list of packages to install
+    comm -23 "${all_packages}" "${scc_packages}" >"${workdir}/install-list.txt"
 }
 
 run_dockerized() {

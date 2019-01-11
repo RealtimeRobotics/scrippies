@@ -54,6 +54,8 @@ EOF
 }
 
 build_megadeb() {
+    "${here}/repolizer" -C "${workdir}" -D "${distribution}"
+
     # create and populate makeself archive dir
     readonly makeself_archive_dir="$(mktemp -dt makeself_archive_dir.XXXXXX)"
     tar -C "${workdir}" -cf- . | tar -C "${makeself_archive_dir}" -xf-
@@ -85,11 +87,6 @@ run_megadeb() {
 Dir "${fake_apt_dir}";
 EOF
 
-    # construct the list of scanned packages
-    readonly fake_apt_repo="${here}"
-    readonly package_list="$(mktemp -t package_list.XXXXXX)"
-    sed -nr 's|^Package: (.*)$|\1|gp' "${fake_apt_repo}/Packages" >"${package_list}"
-
     # create and populate the sources list file
     readonly this_list="$(mktemp -u "${fake_apt_dir}/etc/apt/sources.list.d/$(basename "${this}").XXXXXX").list"
     mkdir -vp "$(dirname "${this_list}")"
@@ -104,12 +101,12 @@ EOF
     if [ -f "${here}/install-list.txt" ]; then
         cat "${here}/install-list.txt"
     else
-        cat "${package_list}"
+        sed -nr 's|^Package: (.*)$|\1|gp' "${here}/Packages"
     fi | xargs apt-get \
-               --yes \
-               --no-install-recommends \
-               --verbose-versions \
-               install
+        --yes \
+        --no-install-recommends \
+        --verbose-versions \
+        install
 }
 
 ################################################################################
