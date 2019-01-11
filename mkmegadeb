@@ -40,6 +40,7 @@ Options:
     -h                 print this usage and return success
     -C WORKDIR         run as if started in WORKDIR
     -D DISTRIBUTION    override distribution (default: ${default_distribution})
+    -R                 "repolize" WORKDIR before building (default: false)
     -o DEB_RUN         output to DEB_RUN (default: \$WORKDIR.deb.run)
 
 Examples:
@@ -54,7 +55,9 @@ EOF
 }
 
 build_megadeb() {
-    "${here}/repolizer" -C "${workdir}" -D "${distribution}"
+    if [ "true" = "${repolize:-false}" ]; then
+        "${here}/repolizer" -C "${workdir}" -D "${distribution}"
+    fi
 
     # create and populate makeself archive dir
     readonly makeself_archive_dir="$(mktemp -dt makeself_archive_dir.XXXXXX)"
@@ -116,7 +119,7 @@ export TMPDIR="${tmpdir}"
 export LC_ALL=C
 export DEBIAN_FRONTEND=noninteractive DEBCONF_NONINTERACTIVE_SEEN=true
 
-while getopts ":hrC:D:o:" opt; do
+while getopts ":hrC:D:Ro:" opt; do
     case "${opt}" in
         h)
             usage
@@ -133,6 +136,7 @@ while getopts ":hrC:D:o:" opt; do
             readonly workdir="${workdir}"
             ;;
         D) readonly distribution="${OPTARG}" ;;
+        R) readonly repolize="true" ;;
         o) readonly makeself_file_name="${OPTARG}" ;;
         :) die "missing argument: -${OPTARG}" ;;
         \?) die "bad option: -${OPTARG}" ;;
