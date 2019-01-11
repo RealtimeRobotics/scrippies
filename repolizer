@@ -51,26 +51,38 @@ EOF
 
 # $1 : start node
 # $2 : edge list
+# $3 : result list
 traverse() {
-    if grep -q "^$1" <"$2"; then
-        grep "^$1" <"$2" | while read curr next; do
-            traverse "${next}" "$2"
-        done
-    else
-        echo "$1"
+    # if $1 is already a result, then return
+    if grep -q "$1" "$3"; then
+        return
     fi
+
+    # look for edges starting at $1
+    edges="$(mktemp -t "edges_$1.XXXXXX")"
+    grep "^$1" <"$2" >"${edges}"
+
+    # if no edges starting at $1, then add $1 to results and return
+    if ! [ -s "${edges}" ]; then
+        echo "$1" >>"$3"
+        return
+    fi
+
+    while read curr next; do
+        traverse "${next}" "$2" "$3"
+    done <"${edges}"
 }
 
 # Kosaraju's algorithm for finding strongly connected components
 #
 # $1 : adjacency list of edges
 kosaraju_scc() {
-    readonly edges="$(mktemp -t edges.XXXXXX)"
+    edges="$(mktemp -t edges.XXXXXX)"
     cat >"${edges}" <"${1:-/dev/stdin}"
 
     # create the topological sort; save stderr to find cycles
-    readonly tsort_out="$(mktemp -t tsort_out.XXXXXX)"
-    readonly tsort_err="$(mktemp -t tsort_err.XXXXXX)"
+    tsort_out="$(mktemp -t tsort_out.XXXXXX)"
+    tsort_err="$(mktemp -t tsort_err.XXXXXX)"
     tsort <"${edges}" >"${tsort_out}" 2>"${tsort_err}" || true
 
     # remove edges that comprise cycles
@@ -78,14 +90,69 @@ kosaraju_scc() {
         | xargs -I{} sed -i "/^{}/d" "${edges}"
     
     # transpose edges to create reverse edges
-    readonly redges="$(mktemp -t redges.XXXXXX)"
+    redges="$(mktemp -t redges.XXXXXX)"
     sed -r 's|^([[:graph:]]+)([[:space:]]+)([[:graph:]]+)$|\3\2\1|g' <"${edges}" >"${redges}"
     
     # in topological order, traverse the graph of reversed edges; print every
     # dead end
+    res="$(mktemp -t res.XXXXXX)"
     while read pkg; do
-        traverse "${pkg}" "${redges}";
-    done <"${tsort_out}" | sort -u
+        traverse "${pkg}" "${redges}" "${res}";
+    done <"${tsort_out}"
+    sort <"${res}"
+}
+
+# given Packages file, print dependency edges
+#
+# $1 : Packages file
+packages2edges() {
+    # enumerate package names
+    packages="$(mktemp -t packages.XXXXXX)"
+    sed -nr 's|^Package: (.*)$|\1|gp' <"${1:-/dev/stdin}" >"${packages}"
+
+    # enumerate recursive dependencies
+    # https://stackoverflow.com/questions/22008193/how-to-list-download-the-recursive-dependencies-of-a-debian-package/41428445#41428445
+    depends="$(mktemp -t depends.XXXXXX)"
+    xargs apt-cache depends \
+          --recurse \
+          --no-recommends \
+          --no-suggests \
+          --no-conflicts \
+          --no-breaks \
+          --no-replaces \
+          --no-enhances \
+          --no-pre-depends \
+          <"${packages}" >"${depends}"
+
+    # > Package names (both source and binary, see Package) must consist only
+    # > of lower case letters (a-z), digits (0-9), plus (+) and minus (-)
+    # > signs, and periods (.). They must be at least two characters long and
+    # > must start with an alphanumeric character.
+    #
+    # https://www.debian.org/doc/debian-policy/ch-controlfields.html#source
+    sed -nri \
+        -e 's/^([[:alnum:]][[:alnum:].+-]+)$/\n\1/gp' \
+        -e 's/^ [ |]Depends: ([[:alnum:]][[:alnum:].+-]+)$/\1/gp' \
+        "${depends}"
+
+    # create adjacency list from apt-cache depends
+    adjlist="$(mktemp -t adjlist.XXXXXX)"
+    (
+        cd "$(mktemp -d)"
+        csplit -sn9 "${depends}" '/^$/' '{*}'
+        find . -type f -name 'xx*' \
+             -exec sed -i '/^[[:space:]]*$/d' {} + \
+             -exec paste -s {} + \
+             >"${adjlist}"
+    )
+    sed -i '/^[[:space:]]*$/d' "${adjlist}"
+    sort -uo "${adjlist}" "${adjlist}"
+
+    # create edges from adjacency list
+    while read head rest; do
+        # rest is empty iff head has no dependencies; no edge needed
+        echo "${rest}" | tr '\t' '\n' | xargs -rI{} printf "${head}\t{}\n"
+    done <"${adjlist}"
 }
 
 run_raw() {
@@ -106,58 +173,22 @@ deb     [trusted=yes] file://${PWD} ./
 EOF
     )
 
-    # enumerate the list of scanned packages
-    readonly package_list="$(mktemp -t package_list.XXXXXX)"
-    sed -nr 's|^Package: (.*)$|\1|gp' "${workdir}/Packages" >"${package_list}"
-
-    # from the list of scanned packages, enumerate recursive dependencies
-    # https://stackoverflow.com/questions/22008193/how-to-list-download-the-recursive-dependencies-of-a-debian-package/41428445#41428445
-    readonly depends_list="$(mktemp -t depends_list.XXXXXX)"
-    apt-get -y update >&2
-    sed -nr 's|^Package: (.*)$|\1|gp' "${workdir}/Packages" \
-        | xargs apt-cache depends \
-            --recurse \
-            --no-recommends \
-            --no-suggests \
-            --no-conflicts \
-            --no-breaks \
-            --no-replaces \
-            --no-enhances \
-            --no-pre-depends \
-            <"${package_list}" >"${depends_list}"
-
-    # > Package names (both source and binary, see Package) must consist only
-    # > of lower case letters (a-z), digits (0-9), plus (+) and minus (-)
-    # > signs, and periods (.). They must be at least two characters long and
-    # > must start with an alphanumeric character.
-    #
-    # https://www.debian.org/doc/debian-policy/ch-controlfields.html#source
-    sed -nri '/^[[:alnum:]][[:alnum:].+-]+$/p' "${depends_list}"
-    sort -uo "${depends_list}" "${depends_list}"
-
+    edges="$(mktemp -t edges.XXXXXX)"
+    packages2edges <"${workdir}/Packages" >"${edges}"
     (
         cd "${workdir}"
-        xargs apt-get download <"${depends_list}"
+        cut -f2 "${edges}" | xargs apt-get download
 
         # again, because we (may) have added packages
         dpkg-scanpackages --multiversion . >Packages
     )
 
-    # re-enumerate the scanned packages
-    sed -nr 's|^Package: (.*)$|\1|gp' "${workdir}/Packages" >"${package_list}"
-
-    # generate the dependency graph
-    readonly depend_edges="$(mktemp -t depend_edges.XXXXXX)"
-    while read pkg; do
-        apt-cache depends "${pkg}" \
-            | sed -nr 's|^  Depends: (.*)$|\1|gp' \
-            | while read dep; do
-            echo "${pkg} ${dep}"
-        done
-    done <"${package_list}" >"${depend_edges}"
+    # TODO: FIX KOSARAJU
+    return
+    packages2edges <"${workdir}/Packages" >"${edges}"
 
     # generate the list of "strongly connected component" packages
-    kosaraju_scc <"${depend_edges}" >"${workdir}/install-list.txt"
+    kosaraju_scc <"${edges}" >"${workdir}/install-list.txt"
 }
 
 run_dockerized() {
