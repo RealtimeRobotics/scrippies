@@ -331,7 +331,8 @@ run_dockerized() {
         --env THIS="${this}" \
         --env WORKDIR="${workdir}" \
         --interactive \
-        --mount type=bind,readonly,source="${here}",target="${here}" \
+        --mount type=bind,readonly,source="${here}/configure-apt",target="${here}/configure-apt" \
+        --mount type=bind,readonly,source="${this}",target="${this}" \
         --mount type=bind,source="${workdir}",target="${workdir}" \
         --rm \
         --workdir "${workdir}" \
