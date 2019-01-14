@@ -108,7 +108,7 @@ build_megadeb() {
     # note the (undocumented) trailing `-r` option; this is what causes the
     # self-extracting archive to invoke this script's `run_megadeb` function
     "${here}/mkself" \
-        --nocomp \
+        --nocomp --sha256 \
         "${makeself_archive_dir}" \
         "${makeself_file_name}" \
         "MegaDeb" \
