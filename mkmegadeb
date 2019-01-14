@@ -30,11 +30,8 @@ cleanup() {
 
 usage() {
     cat <<EOF
-Usage: $(basename ${this}) [OPTION]... [WORKDIR]
+Usage: $(basename ${this}) [OPTION]...
 Create megadeb from all debian packages in current working directory.
-
-Notes:
-    WORKDIR defaults to \$PWD
 
 Options:
     -h                 print this usage and return success
@@ -47,36 +44,15 @@ Examples:
 
     \$ $(basename ${this})
 
-    \$ $(basename ${this}) \$PWD
+    \$ $(basename ${this}) -C \$PWD
 
-    \$ $(basename ${this}) -D xenial \$PWD
+    \$ $(basename ${this}) -C \$PWD -D xenial
+
+    \$ $(basename ${this}) -C \$PWD -D xenial -R
+
+    \$ $(basename ${this}) -C \$PWD -D xenial -R -o \$PWD.deb.run
 
 EOF
-}
-
-build_megadeb() {
-    if [ "true" = "${repolize:-false}" ]; then
-        "${here}/repolizer" -C "${workdir}" -D "${distribution}"
-    fi
-
-    # create and populate makeself archive dir
-    readonly makeself_archive_dir="$(mktemp -dt makeself_archive_dir.XXXXXX)"
-    tar -C "${workdir}" -cf- . | tar -C "${makeself_archive_dir}" -xf-
-    cp -v "${this}" "${makeself_archive_dir}/$(basename "${this}")"
-
-    if [ -n "${makeself_file_name:-}" ]; then
-        info "makeself_file_name: ${makeself_file_name}"
-    else
-        readonly makeself_file_name="${workdir}.deb.run"
-        warning "defaulting makeself_file_name: ${makeself_file_name}"
-    fi
-
-    "${here}/mkself" \
-        --nocomp \
-        "${makeself_archive_dir}" \
-        "${makeself_file_name}" \
-        "MegaDeb" \
-        "./$(basename "${this}")" -r
 }
 
 run_megadeb() {
@@ -112,6 +88,33 @@ EOF
         install
 }
 
+build_megadeb() {
+    if [ "true" = "${repolize:-false}" ]; then
+        "${here}/repolizer" -C "${workdir}" -D "${distribution}"
+    fi
+
+    # create and populate makeself archive dir
+    readonly makeself_archive_dir="$(mktemp -dt makeself_archive_dir.XXXXXX)"
+    tar -C "${workdir}" -cf- . | tar -C "${makeself_archive_dir}" -xf-
+    cp -v "${this}" "${makeself_archive_dir}/$(basename "${this}")"
+
+    if [ -n "${makeself_file_name:-}" ]; then
+        info "makeself_file_name: ${makeself_file_name}"
+    else
+        readonly makeself_file_name="${workdir}.deb.run"
+        warning "defaulting makeself_file_name: ${makeself_file_name}"
+    fi
+
+    # note the (undocumented) trailing `-r` option; this is what causes the
+    # self-extracting archive to invoke this script's `run_megadeb` function
+    "${here}/mkself" \
+        --nocomp \
+        "${makeself_archive_dir}" \
+        "${makeself_file_name}" \
+        "MegaDeb" \
+        "./$(basename "${this}")" -r
+}
+
 ################################################################################
 
 trap cleanup EXIT
@@ -143,6 +146,10 @@ while getopts ":hrC:D:Ro:" opt; do
     esac
 done
 shift "$((${OPTIND} - 1))"
+
+if ! [ 0 -eq "$#" ]; then
+    die "bad args"
+fi
 
 if [ -n "${distribution:-}" ]; then
     info "distribution: ${distribution}"
