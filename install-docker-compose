@@ -1,0 +1,27 @@
+#!/bin/sh
+
+# scrippies/docker-compose-install
+
+set -euvx
+
+# https://docs.docker.com/compose/install/
+
+cd "$(mktemp -d)"
+
+# https://unix.stackexchange.com/a/157219
+url_tag_latest=$(
+    curl -sLISo /dev/null \
+        -w "%{url_effective}\n" \
+        https://github.com/docker/compose/releases/latest
+)
+
+version_latest=$(basename ${url_tag_latest})
+
+curl -sLo docker-compose \
+    https://github.com/docker/compose/releases/download/${version_latest}/docker-compose-$(uname -s)-$(uname -m)
+
+ls -lah ${PWD}
+chmod +x ${PWD}/docker-compose
+sudo cp -v ${PWD}/docker-compose /usr/local/bin/docker-compose
+command -v docker-compose
+docker-compose version
