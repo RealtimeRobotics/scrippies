@@ -26,35 +26,74 @@ cleanup() {
     return "${status}"
 }
 
-readonly edges="$(mktemp -t edges.XXXXXX)"
-cat >"${edges}" <"${1-/dev/stdin}"
-
-# create the topological sort; save stderr to find cycles
-readonly tsort_out="$(mktemp -t tsort_out.XXXXXX)"
-readonly tsort_err="$(mktemp -t tsort_err.XXXXXX)"
-tsort <"${edges}" >"${tsort_out}" 2>"${tsort_err}" || true
-
-# remove edges that comprise cycles
-sed -nr 's|^tsort: ([[:graph:]]+)$|\1|gp' "${tsort_err}" \
-    | xargs -I{} sed -i "/^{}/d" "${edges}"
-
-# transpose edges to create reverse edges
-readonly redges="$(mktemp -t redges.XXXXXX)"
-sed -r 's|^([[:graph:]]+)([[:space:]]+)([[:graph:]]+)$|\3\2\1|g' <"${edges}" >"${redges}"
-
 # $1 : start node
 # $2 : edge list
+# $3 : result list
 traverse() {
-    if grep -q "^$1" <"$2"; then
-        grep "^$1" <"$2" | while read curr next; do
-            traverse "${next}" "$2"
-        done
-    else
-        echo "$1"
+    # if $1 is already a result, then do nothing and return
+    if grep -qE "^$1$" "$3"; then
+        return
     fi
+
+    # look for edges starting at $1: if none, then add $1 to results and return
+    if [ -n "$(sed -nr "/^$1\t[[:graph:]]+$/p" "$2")" ]; then
+        echo "$1" >>"$3"
+        return
+    fi
+
+    # else, process each edge
+    sed -nr "/^$1\t[[:graph:]]+$/p" "$2" | while read curr next; do
+        traverse "${next}" "$2" "$3"
+    done
 }
 
-# traverse the graph of reversed edges; print every dead end
-while read pkg; do traverse "${pkg}" "${redges}"; done <"${tsort_out}" | sort -u
+# Kosaraju's algorithm for finding strongly connected components
+#
+# $1 : adjacency list of edges
+kosaraju_scc() {
+    # vet given edges file
+    if ! [ -n "${1:-}" ]; then
+        error "bad args"
+        return 1
+    fi
+    if ! [ -f "$1" ]; then
+        error "missing file: $1"
+        return 1
+    fi
+    if ! [ -s "$1" ]; then
+        error "empty file: $1"
+        return 1
+    fi
+    local edges="$(mktemp -t edges.XXXXXX)"
+    cp -v "$1" "${edges}"
 
+    # create the topological sort; save stderr to find cycles
+    tsort_out="$(mktemp -t tsort_out.XXXXXX)"
+    tsort_err="$(mktemp -t tsort_err.XXXXXX)"
+    if ! tsort <"${edges}" >"${tsort_out}" 2>"${tsort_err}"; then
+        while read tsort_err_line; do
+            warning "${tsort_err_line}"
+        done <"${tsort_err}"
+    fi
+
+    # remove edges that comprise cycles
+    sed -nr 's|^tsort: ([[:graph:]]+)$|\1|gp' "${tsort_err}" \
+        | xargs -I{} sed -i "/^{}/d" "${edges}"
+
+    # transpose edges to create reverse edges
+    local redges="$(mktemp -t redges.XXXXXX)"
+    sed -r 's|^([[:graph:]]+)([[:space:]]+)([[:graph:]]+)$|\3\2\1|g' <"${edges}" >"${redges}"
+
+    # in topological order, traverse the graph of reversed edges; print every
+    # dead end
+    local dead_ends="$(mktemp -t dead_ends.XXXXXX)"
+    while read pkg; do
+        traverse "${pkg}" "${redges}" "${dead_ends}"
+    done <"${tsort_out}"
+    cat "${dead_ends}"
+}
+
+readonly given="$(mktemp -t given.XXXXXX)"
+cat >"${given}" <"${1-/dev/stdin}"
+kosaraju_scc "${given}"
 exit "$?"
