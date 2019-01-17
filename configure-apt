@@ -28,23 +28,58 @@ cleanup() {
 
 usage() {
     cat <<EOF
-Usage: $(basename ${this}) [DISTRIBUTION]
+Usage: $(basename ${this}) [OPTION]... [DISTRIBUTION]
 Configure apt to use additional repositories.
 
 Notes:
-
     DISTRIBUTION defaults to \$(lsb_release --short --codename).
+
+Options:
+    -h    print usage and exit
+    -A    install everything (this is the default)
+    -K    install public keys only
+    -L    install apt sources list files only
+    -I    use intranet mirrors (implies -X)
+    -X    "excise" first (backup and remove /etc/apt/sources.list)
+    -Z    "zap" first (backup and remove every /etc/apt/sources.list.d/*.list)
 
 Examples:
 
-    \$ $(basename ${this})           # requires lsb_release
+    # discover distribution, install everything:
+    \$ $(basename ${this})
+    \$ $(basename ${this}) -A
+
+    # discover distribution, install public keys only
+    \$ $(basename ${this}) -K
+
+    # discover distribution, install apt sources list files only
+    \$ $(basename ${this}) -L
+
+    # discover distribution, install everything, use intranet mirrors
+    \$ $(basename ${this}) -I
+    \$ $(basename ${this}) -IX
+    \$ $(basename ${this}) -AI
+    \$ $(basename ${this}) -AIX
 
     \$ $(basename ${this}) trusty
 
     \$ $(basename ${this}) xenial
 
     \$ $(basename ${this}) bionic
+
 EOF
+}
+
+apt_config_path() {
+    cut -d= -f2 | xargs -n1 | paste -sd/ | xargs readlink -f
+}
+
+etc_apt_sources_list() {
+    apt-config shell _ Dir _ Dir::Etc _ Dir::Etc::sourcelist | apt_config_path
+}
+
+etc_apt_sources_list_d() {
+    apt-config shell _ Dir _ Dir::Etc _ Dir::Etc::sourceparts | apt_config_path
 }
 
 ################################################################################
@@ -54,59 +89,97 @@ export TMPDIR="${tmpdir}"
 export LC_ALL=C
 
 if ! [ 0 -eq "$(id -u)" ]; then
-    sudo "${this}"
+    sudo "${this}" $@
     exit "$?"
 fi
 
-while getopts ":h" opt; do
+while getopts ":hAKLIXZ" opt; do
     case "${opt}" in
         h)
             usage
             exit 0
             ;;
+        A)
+            install_keys="true"
+            install_lists="true"
+            ;;
+        K) install_keys="true" ;;
+        L) install_lists="true" ;;
+        I)
+            use_intranet="true"
+            excise="true"
+            ;;
+        X) excise="true" ;;
+        Z) zap="true" ;;
         :) die "missing argument: -${OPTARG}" ;;
         \?) die "bad option: -${OPTARG}" ;;
     esac
 done
 shift "$((${OPTIND} - 1))"
 
-if [ 0 -eq "$#" ]; then
-    warning "missing distribution; will attempt to discover"
-    if ! command -v lsb_release >/dev/null 2>&1; then
-        die "missing program: lsb_release"
-    fi
-    if ! distribution="$(lsb_release --short --codename)"; then
-        die "failure: lsb_release --short --codename"
-    fi
-    readonly distribution="${distribution}"
-    info "discovered distribution: ${distribution}"
-elif [ 1 -eq "$#" ]; then
-    readonly distribution="$1"
+case "$#" in
+    0)
+        warning "missing distribution; will attempt to discover"
+        if ! command -v lsb_release >/dev/null 2>&1; then
+            die "missing program: lsb_release"
+        fi
+        if ! distribution="$(lsb_release --short --codename)"; then
+            die "failure: lsb_release --short --codename"
+        fi
+        readonly distribution="${distribution}"
+        info "discovered distribution: ${distribution}"
+        ;;
+    1)
+        readonly distribution="$1"
+        ;;
+    *)
+        die "bad args"
+        ;;
+esac
+
+if [ "true" = "${install_keys:-false}" ]; then
+    info "will install keys"
+elif [ "true" = "${install_lists:-false}" ]; then
+    info "will install lists"
 else
-    die "bad args"
+    install_keys="true"
+    install_lists="true"
+    info "will install keys"
+    info "will install lists"
 fi
 
-if ! command -v gpg >/dev/null 2>&1; then
-    die "missing program: gpg"
+if [ "true" = "${excise:-false}" ]; then
+    rm -vf "$(etc_apt_sources_list)"
 fi
 
-info "gpg path: $(command -v gpg)"
-info "gpg version: $(gpg --version)"
+if [ "true" = "${zap:-false}" ]; then
+    find "$(etc_apt_sources_list_d)" -type f -name '*.list' -exec mv -v {} {}.backup \;
+fi
 
-# The following heredoc is the ASCII-armored gpg pubkey from Realsense. It's
-# used to verify the debian packages therefrom. It was acquired like this:
-#
-# # apt-key adv \
-# > --keyserver hkp://keyserver.ubuntu.com \
-# > --recv-key 0xC8B3A55A6F3EFCDE
-#
-# It was exported like this:
-#
-# # apt-key export 0xC8B3A55A6F3EFCDE
-#
-# Reference: https://github.com/IntelRealSense/librealsense/blob/master/doc/distribution_linux.md
-info "installing public key: Realsense"
-apt-key add --verbose - <<'EOF'
+if [ "true" = "${install_keys:-false}" ]; then
+    if ! command -v gpg >/dev/null 2>&1; then
+        die "missing program: gpg"
+    fi
+    info "gpg path: $(command -v gpg)"
+    info "gpg version: $(gpg --version)"
+fi
+
+if [ "true" = "${install_keys:-false}" ]; then
+    # The following heredoc is the ASCII-armored gpg pubkey from
+    # Realsense. It's used to verify the debian packages therefrom. It was
+    # acquired like this:
+    #
+    # # apt-key adv \
+    # > --keyserver hkp://keyserver.ubuntu.com \
+    # > --recv-key 0xC8B3A55A6F3EFCDE
+    #
+    # It was exported like this:
+    #
+    # # apt-key export 0xC8B3A55A6F3EFCDE
+    #
+    # Reference: https://github.com/IntelRealSense/librealsense/blob/master/doc/distribution_linux.md
+    info "installing public key: Realsense"
+    apt-key add --verbose - <<'EOF'
 -----BEGIN PGP PUBLIC KEY BLOCK-----
 Version: GnuPG v1
 
@@ -128,28 +201,20 @@ quh0EmUG2XwVM89VNH4Y45USyqal4RhISMw=
 -----END PGP PUBLIC KEY BLOCK-----
 EOF
 
-info "installing /etc/apt/sources.list.d/realsense.list"
-cat >/etc/apt/sources.list.d/realsense.list <<EOF
-# /etc/apt/sources.list.d/realsense.list
-#
-# public apt repository for realsense
-deb     http://realsense-hw-public.s3.amazonaws.com/Debian/apt-repo ${distribution} main
-EOF
-
-# The following heredoc is the ASCII-armored gpg pubkey from ROS. It's used
-# to verify the debian packages therefrom. It was acquired like this:
-#
-# # apt-key adv \
-# > --keyserver hkp://ha.pool.sks-keyservers.net:80 \
-# > --recv-key 421C365BD9FF1F717815A3895523BAEEB01FA116
-#
-# It was exported like this:
-#
-# # apt-key export rosbuild@ros.org
-#
-# Reference: http://wiki.ros.org/kinetic/Installation/Ubuntu
-info "installing public key: ROS"
-apt-key add --verbose - <<'EOF'
+    # The following heredoc is the ASCII-armored gpg pubkey from ROS. It's used
+    # to verify the debian packages therefrom. It was acquired like this:
+    #
+    # # apt-key adv \
+    # > --keyserver hkp://ha.pool.sks-keyservers.net:80 \
+    # > --recv-key 421C365BD9FF1F717815A3895523BAEEB01FA116
+    #
+    # It was exported like this:
+    #
+    # # apt-key export rosbuild@ros.org
+    #
+    # Reference: http://wiki.ros.org/kinetic/Installation/Ubuntu
+    info "installing public key: ROS"
+    apt-key add --verbose - <<'EOF'
 -----BEGIN PGP PUBLIC KEY BLOCK-----
 Version: GnuPG v1
 
@@ -182,32 +247,23 @@ x9o=
 -----END PGP PUBLIC KEY BLOCK-----
 EOF
 
-info "installing /etc/apt/sources.list.d/ros.list"
-cat >/etc/apt/sources.list.d/ros.list <<EOF
-# /etc/apt/sources.list.d/ros.list
-#
-# public apt repository for ros
-deb     http://packages.ros.org/ros/ubuntu ${distribution} main
-deb-src http://packages.ros.org/ros/ubuntu ${distribution} main
-EOF
-
-# The following heredoc is a Canonical-provided gpg pubkey in ascii armor. As
-# of this writing, this pubkey is...
-#
-# * _not_ shipped with Bionic (18.04) distributions
-#
-# * required to verify signatures on some older packages that still bear
-#   signatures made with the associated privkey
-#
-# This pubkey was acquired like this:
-#
-# # apt-key adv --keyserver keyserver.ubuntu.com --recv 0x40976EAF437D05B5
-#
-# It was exported like this:
-#
-# $ apt-key adv --armor --export --export-options=export-minimal 0x40976EAF437D05B5
-info "installing public key: Canonical"
-apt-key add --verbose - <<'EOF'
+    # The following heredoc is a Canonical-provided gpg pubkey in ascii
+    # armor. As of this writing, this pubkey is...
+    #
+    # * _not_ shipped with Bionic (18.04) distributions
+    #
+    # * required to verify signatures on some older packages that still bear
+    #   signatures made with the associated privkey
+    #
+    # This pubkey was acquired like this:
+    #
+    # # apt-key adv --keyserver keyserver.ubuntu.com --recv 0x40976EAF437D05B5
+    #
+    # It was exported like this:
+    #
+    # $ apt-key adv --armor --export --export-options=export-minimal 0x40976EAF437D05B5
+    info "installing public key: Canonical"
+    apt-key add --verbose - <<'EOF'
 -----BEGIN PGP PUBLIC KEY BLOCK-----
 Version: GnuPG v1
 
@@ -239,3 +295,80 @@ mhqidES4MwCggqQyo+w1Twx6DKLF+3rF5nf1F3Q=
 =2m5N
 -----END PGP PUBLIC KEY BLOCK-----
 EOF
+fi
+
+# read stdin (assumed to be apt sources list file body) into the given file
+#
+# $1 : listfile to be written
+read_into_listfile() {
+    info "installing: $1"
+    if [ -f "$1" ]; then
+        warning "file exists: $1"
+        warning "$(mv -v $1 $1.backup)"
+    fi
+    cat >"$1" <<EOF
+# $1
+#
+# THIS IS A GENERATED FILE
+# whoami    : $(whoami)
+# hostname  : $(hostname)
+# date      : $(date -uIs)
+# generator : $(basename "${this}")
+
+EOF
+    cat >>"$1"
+}
+
+if [ "true" = "${install_lists:-false}" ]; then
+    # realsense
+    if [ "true" = "${use_intranet:-false}" ]; then
+        readonly realsense_url="http://10.164.5.14/apt/realsense/${distribution}"
+        warning "realsense_url: ${realsense_url}"
+    else
+        readonly realsense_url="http://realsense-hw-public.s3.amazonaws.com/Debian/apt-repo"
+        info "realsense_url: ${realsense_url}"
+    fi
+    read_into_listfile "$(etc_apt_sources_list_d)/realsense.list" <<EOF
+deb     ${realsense_url} ${distribution} main
+EOF
+
+    # ros
+    if [ "true" = "${use_intranet:-false}" ]; then
+        readonly ros_url="http://10.164.5.14/apt/ros/${distribution}"
+        warning "ros_url: ${ros_url}"
+    else
+        readonly ros_url="http://packages.ros.org/ros/ubuntu"
+        info "ros_url: ${ros_url}"
+    fi
+    read_into_listfile "$(etc_apt_sources_list_d)/ros.list" <<EOF
+deb     ${ros_url} ${distribution} main
+deb-src ${ros_url} ${distribution} main
+EOF
+
+    # ubuntu
+    if [ "true" = "${use_intranet:-false}" ]; then
+        readonly ubuntu_url="http://10.164.5.14/apt/ubuntu/${distribution}"
+        warning "ubuntu_url: ${ubuntu_url}"
+    else
+        readonly ubuntu_url="http://archive.ubuntu.com/ubuntu"
+        info "ubuntu_url: ${ubuntu_url}"
+    fi
+    read_into_listfile "$(etc_apt_sources_list_d)/ubuntu.list" <<EOF
+deb     ${ubuntu_url} ${distribution} main restricted universe multiverse
+deb     ${ubuntu_url} ${distribution}-backports main restricted universe multiverse
+deb     ${ubuntu_url} ${distribution}-security main restricted universe multiverse
+deb     ${ubuntu_url} ${distribution}-updates main restricted universe multiverse
+
+deb-src ${ubuntu_url} ${distribution} main restricted universe multiverse
+deb-src ${ubuntu_url} ${distribution}-backports main restricted universe multiverse
+deb-src ${ubuntu_url} ${distribution}-security main restricted universe multiverse
+deb-src ${ubuntu_url} ${distribution}-updates main restricted universe multiverse
+
+deb     ${ubuntu_url} ${1} main/debian-installer restricted/debian-installer universe/debian-installer multiverse/debian-installer
+# todo: fix this
+#deb     ${ubuntu_url} ${1}-updates main/debian-installer restricted/debian-installer universe/debian-installer multiverse/debian-installer
+EOF
+
+fi
+
+exit "$?"
