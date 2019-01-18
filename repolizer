@@ -247,6 +247,46 @@ packages2edges() {
     cat "${partords}"
 }
 
+apt_config_get() {
+    apt-config shell _ "$1" | cut -d= -f2- | xargs
+}
+
+apt_config_path() {
+    cut -d= -f2 | xargs -n1 | paste -sd/ | xargs readlink -f
+}
+
+etc_apt_sources_list() {
+    apt-config shell _ Dir _ Dir::Etc _ Dir::Etc::sourcelist | apt_config_path
+}
+
+etc_apt_sources_list_d() {
+    apt-config shell _ Dir _ Dir::Etc _ Dir::Etc::sourceparts | apt_config_path
+}
+
+# take a dir, use it to create and export a fake apt environment
+enfake_apt() {
+    local dirs="etc/apt var/cache/apt var/lib/apt var/lib/dpkg"
+    # we don't care when the following happens:
+    #
+    #     tar: var/cache/apt/archives/partial: Cannot open: Permission denied
+    #     tar: var/cache/apt/archives/lock: Cannot open: Permission denied
+    #     tar: var/lib/apt/lists/partial: Cannot open: Permission denied
+    #     tar: var/lib/apt/lists/lock: Cannot open: Permission denied
+    #     tar: var/lib/dpkg/lock-frontend: Cannot open: Permission denied
+    #     tar: var/lib/dpkg/triggers/Lock: Cannot open: Permission denied
+    #     tar: var/lib/dpkg/lock: Cannot open: Permission denied
+    #     tar: Exiting with failure status due to previous errors
+    tar -cf- -C / ${dirs} | tar -xf- -C "$1"
+    (
+        cd "$1"
+        mkdir -vp ${dirs}
+    )
+    export APT_CONFIG="$1/etc/apt/apt.conf"
+    cat >"${APT_CONFIG}" <<EOF
+Dir "$1";
+EOF
+}
+
 # for the given directory...
 #
 # * create and/or update a fake apt repository within
@@ -255,62 +295,63 @@ packages2edges() {
 #
 # * update the apt configuration
 #
-# $1 : fake apt repository directory
+# $1 : the directory that will become an apt repository
 apt_repolize() {
     if ! [ -n "${1:-}" ]; then
         error "bad args"
         return 1
     fi
     if ! [ -d "$1" ]; then
-        error "missing directory: $1"
+        error "not a directory: $1"
         return 1
     fi
     (
         cd "$1"
         dpkg-scanpackages --multiversion . >Packages
-        cat >"${fake_apt_dir}/etc/apt/sources.list.d/$(echo "${PWD}" | tr -s '/' '_').list" <<EOF
+        cat >"$(etc_apt_sources_list_d)/$(echo "${PWD}" | tr -s '/' '_').list" <<EOF
 deb     [trusted=yes] file://${PWD} ./
 EOF
-        apt-get -y update
     )
+    apt-get -y update
 }
 
 run_raw() {
     # make a fake apt configuration that a luser can work
-    local fake_apt_dir="$(mktemp -dt fake_apt_dir.XXXXXX)"
-    tar -cf- -C / etc/apt var/lib/apt var/cache/apt | tar -xf- -C "${fake_apt_dir}"
-    export APT_CONFIG="${fake_apt_dir}/etc/apt/apt.conf"
-    cat >"${APT_CONFIG}" <<EOF
-Dir "${fake_apt_dir}";
-EOF
+    enfake_apt "$(mktemp -dt fake_apt_dir.XXXXXX)"
 
-    # create/update fake apt repo in workdir
+    # create/update fake apt repo in workdir; we don't care when the following
+    # happens:
+    #
+    #     rm: cannot remove '/var/cache/apt/archives/partial/*.deb': Permission denied
     apt_repolize "${workdir}"
+    exit "$?"
 
-    local edges="$(mktemp -t edges.XXXXXX)"
-    packages2edges "${workdir}/Packages" >"${edges}"
+    # enumerate package edges; for each edge, the terminating node is the name
+    # of a dependency; download every dependency
+    local package_edges="$(mktemp -t package_edges.XXXXXX)"
+    packages2edges "${workdir}/Packages" >"${package_edges}"
     (
         cd "${workdir}"
-        cut -f2 "${edges}" | xargs apt-get download
+        cut -f2 "${package_edges}" | xargs apt-get download
     )
     apt_repolize "${workdir}"
 
-    # TODO: FIX KOSARAJU
-    packages2edges "${workdir}/Packages" >"${edges}"
+    # generate the list of all packages
+    local packages_all="$(mktemp -t packages_all.XXXXXX)"
+    packages2names "${workdir}/Packages" >"${packages_all}"
+    sort -uo "${packages_all}" "${packages_all}"
+
+    # after (possibly) installing new dependencies, re-enumerate package edges
+    packages2edges "${workdir}/Packages" >"${package_edges}"
 
     # generate the list of "strongly connected component" packages
-    local scc_packages="$(mktemp -t scc_packages.XXXXXX)"
-    kosaraju_scc "${edges}" >"${scc_packages}"
-    sort -uo "${scc_packages}" "${scc_packages}"
-
-    # generate the list of all packages
-    local all_packages="$(mktemp -t all_packages.XXXXXX)"
-    packages2names "${workdir}/Packages" >"${all_packages}"
-    sort -uo "${all_packages}" "${all_packages}"
+    local packages_scc="$(mktemp -t packages_scc.XXXXXX)"
+    kosaraju_scc "${package_edges}" >"${packages_scc}"
+    sort -uo "${packages_scc}" "${packages_scc}"
 
     # set-subtract from all packages the scc packages to give "weakly connected
     # component" packages; i.e., the list of packages to install
-    comm -23 "${all_packages}" "${scc_packages}" >"${workdir}/install-list.txt"
+    comm -23 "${packages_all}" "${packages_scc}" >"${workdir}/install-list.txt"
 }
 
 run_dockerized() {
@@ -322,6 +363,7 @@ run_dockerized() {
     fi
 
     docker container run \
+        --env CONFIGURE_APT_OPTS="${CONFIGURE_APT_OPTS:-}" \
         --env DEBCONF_NONINTERACTIVE_SEEN=true \
         --env DEBIAN_FRONTEND=noninteractive \
         --env DISTRIBUTION="${distribution}" \
@@ -338,9 +380,9 @@ run_dockerized() {
         --workdir "${workdir}" \
         "${image_name}" sh <<'EOF'
 set -euvx
+${HERE}/configure-apt ${CONFIGURE_APT_OPTS} ${DISTRIBUTION}
 apt-get -y update
 apt-get -y --no-install-recommends install dpkg-dev
-"${HERE}/configure-apt" "${DISTRIBUTION}"
 
 groupadd -g "${DOCKER_HOST_GID}" luser
 useradd \
