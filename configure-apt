@@ -149,7 +149,9 @@ else
 fi
 
 if [ "true" = "${excise:-false}" ]; then
-    rm -vf "$(etc_apt_sources_list)"
+    if [ -f "$(etc_apt_sources_list)" ]; then
+        mv -v "$(etc_apt_sources_list)" "$(etc_apt_sources_list).backup"
+    fi
 fi
 
 if [ "true" = "${zap:-false}" ]; then
