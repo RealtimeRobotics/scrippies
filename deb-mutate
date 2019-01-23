@@ -1,0 +1,162 @@
+#!/bin/sh
+
+# scrippies/deb-mutate
+
+set -eu
+
+readonly this="$(readlink -f "$0")"
+readonly here="$(dirname "${this}")"
+readonly whatami="$(basename "${here}").$(basename "${this}")"
+readonly tmpdir="$(mktemp -dt "${whatami}.XXXXXX")"
+
+readonly default_deb_cmd='find .'
+
+log() { echo "${whatami}[$$]: $@" >&2; }
+error() { log "ERROR: $@"; }
+warning() { log "WARNING: $@"; }
+info() { log "INFO: $@"; }
+
+die() {
+    error "$@"
+    usage >&2
+    exit 1
+}
+
+cleanup() {
+    status="$?"
+    rm -rf "${control_tar:-}" "${tmpdir}"
+    return "${status}"
+}
+
+usage() {
+    cat <<EOF
+Usage: $(basename ${this}) [OPTION]... DEB_FILE...
+Execute arbitrary commands on DEB_FILE contents.
+
+Options:
+    -h        print usage and exit
+    -c DEB_CMD    invoke DEB_CMD on contents of DEB_FILE (default: ${default_deb_cmd})
+
+Examples:
+
+    \$ $(basename ${this}) -c ${default_deb_cmd} path/to/foobar.deb
+
+EOF
+}
+
+################################################################################
+
+trap cleanup EXIT
+export TMPDIR="${tmpdir}"
+export LC_ALL=C
+
+readonly headers_whitelist="$(mktemp -t headers_whitelist.XXXXXX)"
+cat >"${headers_whitelist}" <<EOF
+rtr-api/HardwareInterface.hpp
+rtr-api/PathPlanner.hpp
+rtr-math/Pose.hpp
+rtr-occupancy/Array3D.hpp
+rtr-occupancy/Box.hpp
+rtr-occupancy/Voxel.hpp
+rtr-utils/Schema.hpp
+rtr-utils/SchemaHelpers.hpp
+rtr-utils/SmartPtr.hpp
+rtr_perc_api/Buffer.hpp
+rtr_perc_api/SensorCalibration.hpp
+rtr_perc_api/SensorFrame.hpp
+rtr_perc_api/SensorFrameType.hpp
+rtr_perc_api/SensorMetaData.hpp
+rtr_perc_api/SensorPersistence.hpp
+rtr_perc_api/SpatialPerceptionProject.hpp
+rtr_perc_api/Time.hpp
+EOF
+
+while getopts ":hc:" opt; do
+    case "${opt}" in
+        h)
+            usage
+            exit 0
+            ;;
+        c) readonly deb_cmd="${OPTARG}" ;;
+        :) die "missing argument: -${OPTARG}" ;;
+        \?) die "bad option: -${OPTARG}" ;;
+    esac
+done
+shift "$((${OPTIND} - 1))"
+
+if ! [ -n "${deb_cmd:-}" ]; then
+    readonly deb_cmd="ls -lah"
+    warning "defaulting deb_cmd: ${deb_cmd}"
+fi
+
+echo $@ | tr -s '[:space:]' '\n' | while read arg; do
+    if ! deb_file="$(readlink -f "${arg}")"; then
+        die "bad path: ${arg}"
+    fi
+    if ! [ -f "${deb_file}" ]; then
+        die "not a file: ${deb_file}"
+    fi
+    # > The third, last required member is named data.tar. It contains the
+    # > filesystem as a tar archive, either not compressed (supported since
+    # > dpkg 1.10.24), or compressed with gzip (with .gz extension), xz (with
+    # > .xz extension, supported since dpkg 1.15.6), bzip2 (with .bz2
+    # > extension, supported since dpkg 1.10.24) or lzma (with .lzma extension,
+    # > supported since dpkg 1.13.25).
+    #
+    # -- https://manpages.debian.org/unstable/dpkg-dev/deb.5.en.html
+    if ! data_tar="$(ar -t "${deb_file}" | grep -E '^data\.tar(\.(gz|bz2|lzma|xz))?$')"; then
+        die "missing data tarball: ${deb_file}"
+    fi
+    case "${data_tar}" in
+        data.tar)
+            compress="cat"
+            decompress="cat"
+            ;;
+        data.tar.gz)
+            compress="gzip -vc"
+            decompress="gzip -vcd"
+            ;;
+        data.tar.bz2)
+            compress="bzip2 -vc"
+            decompress="bzip2 -vcd"
+            ;;
+        data.tar.lzma)
+            compress="lzma -vc"
+            decompress="lzma -vcd"
+            ;;
+        data.tar.xz)
+            compress="xz -vc"
+            decompress="xz -vcd"
+            ;;
+        *)
+            die "unrecognized data tarball: ${data_tar}"
+            ;;
+    esac
+    deb_dir="$(mktemp -dt "$(basename "${deb_file}").XXXXXX")"
+    data_dir="$(mktemp -dt "${data_tar}.XXXXXX")"
+    tmp_tar="$(mktemp -t tmp_tar.XXXXXX)"
+    (
+        cd "${deb_dir}"
+        info ""
+        info "$(basename "${deb_file}")"
+        ar -vx "${deb_file}" "${data_tar}" >&2
+        info "${data_tar}"
+        eval "${decompress}" <"${data_tar}" >"${tmp_tar}"
+    )
+    (
+        cd "${data_dir}"
+        tar -vxf- <"${tmp_tar}"
+        find . -type f -name '*.hpp' | grep -vf "${headers_whitelist}" | xargs -r rm -vf >&2
+
+        # okay, create new tmp_tar, data_tar
+        rm "${tmp_tar}"
+        find . ! -type d | LC_ALL=C sort | xargs tar -vrf "${tmp_tar}" >&2
+    )
+    (
+        cd "${deb_dir}"
+        eval "${compress}" <"${tmp_tar}" >"${data_tar}"
+        ar -vr "${deb_file}" "${data_tar}"
+    )
+done
+
+exit "$?"
