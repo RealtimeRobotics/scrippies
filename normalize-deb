@@ -1,0 +1,116 @@
+#!/bin/sh
+
+# scrippies/normalize-deb
+
+set -eu
+
+readonly this="$(readlink -f "$0")"
+readonly here="$(dirname "${this}")"
+readonly whatami="$(basename "${this}")"
+readonly tmpdir="$(mktemp -dt "${whatami}.$$.XXXXXX")"
+
+log() { echo "${whatami}[$$]: $@" >&2; }
+error() { log "ERROR: $@"; }
+warning() { log "WARNING: $@"; }
+info() { log "INFO: $@"; }
+
+die() {
+    error "$@"
+    usage >&2
+    exit 1
+}
+
+cleanup() {
+    status="$?"
+    rm -rf "${tmpdir}"
+    return "${status}"
+}
+
+usage() {
+    cat <<EOF
+Usage: $(basename ${this}) [OPTION]... DEB_FILE...
+Normalize the given debian package file(s).
+
+Options:
+    -h                 print this usage and return success
+
+Examples:
+
+    \$ $(basename ${this}) libfoobar-dev_0.1.0_amd64.deb
+
+EOF
+}
+
+# spit() {
+#     ls -lah "$@"
+#     file -bz "$@"
+#     sha1sum "$@"
+#     ar -vt "$@"
+# }
+
+normalize_deb() {
+    local deb_file=""
+    if ! deb_file="$(readlink -f "$1")"; then
+        error "missing file: $1"
+        return 1
+    fi
+    if ! [ -f "${deb_file}" ]; then
+        error "not a file: ${deb_file}"
+        return 1
+    fi
+
+    # > The second required member is named control.tar. It is a tar archive
+    # > containing the package control information, either not compressed
+    # > (supported since dpkg 1.17.6), or compressed with gzip (with .gz
+    # > extension) or xz (with .xz extension, supported since 1.17.6), as a
+    # > series of plain files, of which the file control is mandatory and
+    # > contains the core control information, the conffiles, triggers, shlibs
+    # > and symbols files contain optional control information, and the
+    # > preinst, postinst, prerm and postrm files are optional maintainer
+    # > scripts. The control tarball may optionally contain an entry for ‘.’,
+    # > the current directory.
+    #
+    # -- https://manpages.debian.org/unstable/dpkg-dev/deb.5.en.html
+    if ! control_tar="$(ar -t "${deb_file}" | grep -E '^control\.tar(\.(gz|xz))?$')"; then
+        error "missing control tarball: ${deb_file}"
+        return 1
+    fi
+
+    # > The third, last required member is named data.tar. It contains the
+    # > filesystem as a tar archive, either not compressed (supported since
+    # > dpkg 1.10.24), or compressed with gzip (with .gz extension), xz (with
+    # > .xz extension, supported since dpkg 1.15.6), bzip2 (with .bz2
+    # > extension, supported since dpkg 1.10.24) or lzma (with .lzma extension,
+    # > supported since dpkg 1.13.25).
+    #
+    # -- https://manpages.debian.org/unstable/dpkg-dev/deb.5.en.html
+    local data_tar=""
+    if ! data_tar="$(ar -t "${deb_file}" | grep -E '^data\.tar(\.(gz|bz2|lzma|xz))?$')"; then
+        error "missing data tarball: ${deb_file}"
+        return 1
+    fi
+
+    # spit "${deb_file}"
+    (
+        cd "$(mktemp -dt "$(basename "${deb_file}").XXXXXX")"
+        ar x "${deb_file}" debian-binary "${control_tar}" "${data_tar}"
+        "${here}/normalize-tarball" "${control_tar}"
+        "${here}/normalize-tarball" "${data_tar}"
+        # sha1sum debian-binary "${control_tar}" "${data_tar}"
+        rm "${deb_file}"
+        ar rDc "${deb_file}" debian-binary "${control_tar}" "${data_tar}"
+    )
+    # spit "${deb_file}"
+}
+
+################################################################################
+
+trap cleanup EXIT
+export TMPDIR="${tmpdir}"
+export LC_ALL=C
+
+for arg in $@; do
+    normalize_deb "${arg}"
+done
+
+exit "$?"
