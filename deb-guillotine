@@ -69,14 +69,9 @@ echo $@ | tr -s '[:space:]' '\n' | while read arg; do
     if ! [ -f "${deb_file}" ]; then
         die "not a file: ${deb_file}"
     fi
-
-    #############################################
-    # TODO: REMOVE THE FOLLOWING DEBUGGING CODE #
-    #############################################
-    new_deb_file="$(mktemp -ut "$(basename "${deb_file}").XXXXXX")"
-    old_deb_file="${deb_file}"
-    cp -v "${old_deb_file}" "${new_deb_file}"
-    deb_file="${new_deb_file}"
+    if ! file -b "${deb_file}" | grep -q 'Debian binary package'; then
+        die "$(file "${deb_file}")"
+    fi
 
     # > The third, last required member is named data.tar. It contains the
     # > filesystem as a tar archive, either not compressed (supported since
@@ -95,20 +90,20 @@ echo $@ | tr -s '[:space:]' '\n' | while read arg; do
             decompress="cat"
             ;;
         data.tar.gz)
-            compress="gzip -vc"
-            decompress="gzip -vcd"
+            compress="gzip -c"
+            decompress="gzip -cd"
             ;;
         data.tar.bz2)
-            compress="bzip2 -vc"
-            decompress="bzip2 -vcd"
+            compress="bzip2 -c"
+            decompress="bzip2 -cd"
             ;;
         data.tar.lzma)
-            compress="lzma -vc"
-            decompress="lzma -vcd"
+            compress="lzma -c"
+            decompress="lzma -cd"
             ;;
         data.tar.xz)
-            compress="xz -vc"
-            decompress="xz -vcd"
+            compress="xz -c"
+            decompress="xz -cd"
             ;;
         *)
             die "unrecognized data tarball: ${data_tar}"
@@ -119,15 +114,12 @@ echo $@ | tr -s '[:space:]' '\n' | while read arg; do
     tmp_tar="$(mktemp -t tmp_tar.XXXXXX)"
     (
         cd "${deb_dir}"
-        info ""
-        info "$(basename "${deb_file}")"
-        ar -vx "${deb_file}" "${data_tar}" >&2
-        info "${data_tar}"
+        ar -x "${deb_file}" "${data_tar}" >&2
         eval "${decompress}" <"${data_tar}" >"${tmp_tar}"
     )
     (
         cd "${data_dir}"
-        tar -vxf- <"${tmp_tar}"
+        tar -xf- <"${tmp_tar}"
         whitelist_headers="$(find . -type f -name 'whitelist-headers.txt')"
         if ! [ -f "${whitelist_headers}" ]; then
             warning "deb does not contain whitelist-headers.txt"
@@ -141,29 +133,23 @@ echo $@ | tr -s '[:space:]' '\n' | while read arg; do
             fi
         done
 
-        # okay, create new tmp_tar, data_tar
+        # okay, create new tmp_tar
         rm "${tmp_tar}"
-        find . ! -type d \
+        find . -xdev ! -type d \
             | LC_ALL=C sort \
             | xargs tar \
                 --format=pax \
                 --pax-option "exthdr.name=%d/PaxHeaders/%f,atime:=0,ctime:=0,mtime:=0" \
                 --numeric-owner --owner=0 --group=0 \
                 --mtime=@0 \
-                -vrf "${tmp_tar}" >&2
+                -rf "${tmp_tar}" >&2
     )
     (
         cd "${deb_dir}"
+        # create new data_tar
         eval "${compress}" <"${tmp_tar}" >"${data_tar}"
-        ar -vr "${deb_file}" "${data_tar}"
+        ar -r "${deb_file}" "${data_tar}"
     )
-    old_deb_contents="$(mktemp -t old_deb_contents.XXXXXX)"
-    new_deb_contents="$(mktemp -t new_deb_contents.XXXXXX)"
-    dpkg-deb -c "${old_deb_file}" >"${old_deb_contents}"
-    dpkg-deb -c "${new_deb_file}" >"${new_deb_contents}"
-    sort -uo "${old_deb_contents}" "${old_deb_contents}"
-    sort -uo "${new_deb_contents}" "${new_deb_contents}"
-    # diff "${old_deb_contents}" "${new_deb_contents}"
 done
 
 exit "$?"
