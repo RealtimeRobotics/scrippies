@@ -1,0 +1,112 @@
+#!/bin/sh
+
+# scrippies/normalize-tarball
+
+set -eu
+
+readonly this="$(readlink -f "$0")"
+readonly here="$(dirname "${this}")"
+readonly whatami="$(basename "${this}")"
+readonly tmpdir="$(mktemp -dt "${whatami}.$$.XXXXXX")"
+
+log() { echo "${whatami}[$$]: $@" >&2; }
+error() { log "ERROR: $@"; }
+warning() { log "WARNING: $@"; }
+info() { log "INFO: $@"; }
+
+die() {
+    error "$@"
+    usage >&2
+    exit 1
+}
+
+cleanup() {
+    status="$?"
+    rm -rf "${tmpdir}"
+    return "${status}"
+}
+
+usage() {
+    cat <<EOF
+Usage: $(basename ${this}) [OPTION]... TARBALL...
+Normalize (squash timestamps, sort contents) the given tarball(s).
+
+Options:
+    -h                 print this usage and return success
+
+Examples:
+
+    \$ $(basename ${this}) foobar.tar.xz
+
+EOF
+}
+
+normalize_tarball() {
+    local tarball=""
+    if ! tarball="$(readlink -f "$1")"; then
+        error "missing file: $1"
+        return 1
+    fi
+    if ! [ -f "${tarball}" ]; then
+        error "not a file: ${tarball}"
+        return 1
+    fi
+    case "${tarball}" in
+        *.tar)
+            compress="cat"
+            decompress="cat"
+            ;;
+        *.tar.gz)
+            compress="gzip -c"
+            decompress="gzip -cd"
+            ;;
+        *.tar.bz2)
+            compress="bzip2 -c"
+            decompress="bzip2 -cd"
+            ;;
+        *.tar.lzma)
+            compress="lzma -c"
+            decompress="lzma -cd"
+            ;;
+        *.tar.xz)
+            compress="xz -c9"
+            decompress="xz -cd"
+            ;;
+        *)
+            die "unrecognized file extension: ${tarball}"
+            ;;
+    esac
+    local temp_tar="$(mktemp -t temp_tar.XXXXXX)"
+    local temp_dir="$(mktemp -dt temp_dir.XXXXXX)"
+    eval "${decompress}" <"${tarball}" >"${temp_tar}"
+    
+    tar -xf "${temp_tar}" -C "${temp_dir}"
+    rm "${temp_tar}"
+    (
+        cd "${temp_dir}"
+        find . -xdev ! -type d -print0 \
+            | LC_ALL=C sort -z \
+            | xargs -0 \
+                    tar \
+                    --numeric-owner \
+                    --owner=0 \
+                    --group=0 \
+                    --format=pax \
+                    --pax-option "exthdr.name=%d/PaxHeaders/%f,atime:=0,ctime:=0,mtime:=0" \
+                    --mtime=@0 \
+                    -rf "${temp_tar}"
+    )
+    eval "${compress}" <"${temp_tar}" >"${tarball}"
+}
+
+################################################################################
+
+trap cleanup EXIT
+export TMPDIR="${tmpdir}"
+export LC_ALL=C
+
+for arg in $@; do
+    normalize_tarball "${arg}"
+done
+
+exit "$?"
