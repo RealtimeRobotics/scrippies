@@ -44,6 +44,47 @@ Examples:
 EOF
 }
 
+deb_guillotine() {
+    # vet the given path as an extant Debian binary package
+    local deb_file=""
+    if ! deb_file="$(readlink -f "$1")"; then
+        die "bad path: $1"
+    fi
+    if ! [ -f "${deb_file}" ]; then
+        die "not a file: ${deb_file}"
+    fi
+    if ! file -b "${deb_file}" | grep -q 'Debian binary package'; then
+        die "$(file "${deb_file}")"
+    fi
+
+    (
+        # jump into a temp dir and extract Debian binary package
+        cd "$(mktemp -dt "$(basename "${deb_file}").raw_extract.XXXXXX")"
+        dpkg-deb --raw-extract "${deb_file}" .
+
+        # find the whitelist if it exists
+        local whitelist_headers="$(find . -type f -name whitelist-headers.txt)"
+        if [ -f "${whitelist_headers}" ]; then
+            info "found ${whitelist_headers}"
+        else
+            warning "missing whitelist-headers.txt: ${deb_file}"
+            whitelist_headers="/dev/null"
+        fi
+
+        # enumerate headers, apply whitelist
+        find . -type f -name '*.hpp' | sort | while read header; do
+            if basename "${header}" | grep -qFxf "${whitelist_headers}"; then
+                info "keeping: '${header}'"
+            else
+                warning "$(rm -v "${header}")"
+            fi
+        done
+
+        # rebuild Debian binary package
+        dpkg-deb --build . "${deb_file}"
+    )
+}
+
 ################################################################################
 
 trap cleanup EXIT
@@ -62,94 +103,8 @@ while getopts ":h" opt; do
 done
 shift "$((${OPTIND} - 1))"
 
-echo $@ | tr -s '[:space:]' '\n' | while read arg; do
-    if ! deb_file="$(readlink -f "${arg}")"; then
-        die "bad path: ${arg}"
-    fi
-    if ! [ -f "${deb_file}" ]; then
-        die "not a file: ${deb_file}"
-    fi
-    if ! file -b "${deb_file}" | grep -q 'Debian binary package'; then
-        die "$(file "${deb_file}")"
-    fi
-
-    # > The third, last required member is named data.tar. It contains the
-    # > filesystem as a tar archive, either not compressed (supported since
-    # > dpkg 1.10.24), or compressed with gzip (with .gz extension), xz (with
-    # > .xz extension, supported since dpkg 1.15.6), bzip2 (with .bz2
-    # > extension, supported since dpkg 1.10.24) or lzma (with .lzma extension,
-    # > supported since dpkg 1.13.25).
-    #
-    # -- https://manpages.debian.org/unstable/dpkg-dev/deb.5.en.html
-    if ! data_tar="$(ar -t "${deb_file}" | grep -E '^data\.tar(\.(gz|bz2|lzma|xz))?$')"; then
-        die "missing data tarball: ${deb_file}"
-    fi
-    case "${data_tar}" in
-        data.tar)
-            compress="cat"
-            decompress="cat"
-            ;;
-        data.tar.gz)
-            compress="gzip -c"
-            decompress="gzip -cd"
-            ;;
-        data.tar.bz2)
-            compress="bzip2 -c"
-            decompress="bzip2 -cd"
-            ;;
-        data.tar.lzma)
-            compress="lzma -c"
-            decompress="lzma -cd"
-            ;;
-        data.tar.xz)
-            compress="xz -c"
-            decompress="xz -cd"
-            ;;
-        *)
-            die "unrecognized data tarball: ${data_tar}"
-            ;;
-    esac
-    deb_dir="$(mktemp -dt "$(basename "${deb_file}").XXXXXX")"
-    data_dir="$(mktemp -dt "${data_tar}.XXXXXX")"
-    tmp_tar="$(mktemp -t tmp_tar.XXXXXX)"
-    (
-        cd "${deb_dir}"
-        ar -x "${deb_file}" "${data_tar}" >&2
-        eval "${decompress}" <"${data_tar}" >"${tmp_tar}"
-    )
-    (
-        cd "${data_dir}"
-        tar -xf- <"${tmp_tar}"
-        whitelist_headers="$(find . -type f -name 'whitelist-headers.txt')"
-        if ! [ -f "${whitelist_headers}" ]; then
-            warning "deb does not contain whitelist-headers.txt"
-            whitelist_headers="$(mktemp -t dummy_whitelist_headers.XXXXXX)"
-        fi
-        find . -type f -name '*.hpp' | while read header; do
-            if basename "${header}" | grep -qFxf "${whitelist_headers}"; then
-                info "keeping: ${header}"
-            else
-                warning "$(rm -vf "${header}")"
-            fi
-        done
-
-        # okay, create new tmp_tar
-        rm "${tmp_tar}"
-        find . -xdev ! -type d \
-            | LC_ALL=C sort \
-            | xargs tar \
-                --format=pax \
-                --pax-option "exthdr.name=%d/PaxHeaders/%f,atime:=0,ctime:=0,mtime:=0" \
-                --numeric-owner --owner=0 --group=0 \
-                --mtime=@0 \
-                -rf "${tmp_tar}" >&2
-    )
-    (
-        cd "${deb_dir}"
-        # create new data_tar
-        eval "${compress}" <"${tmp_tar}" >"${data_tar}"
-        ar -r "${deb_file}" "${data_tar}"
-    )
+for arg in $@; do
+    deb_guillotine "${arg}"
 done
 
 exit "$?"
