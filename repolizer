@@ -2,7 +2,7 @@
 
 # scrippies/repolizer
 
-set -euvx
+set -eu
 
 readonly this="$(readlink -f "$0")"
 readonly here="$(dirname "${this}")"
@@ -188,7 +188,6 @@ packages2edges() {
         --no-breaks \
         --no-replaces \
         --no-enhances \
-        --no-pre-depends \
         <"${package_name_list}" >"${apt_cache_depends}"
 
     # From the `apt-cache depends` output, create the "depends blocks"
@@ -206,7 +205,8 @@ packages2edges() {
     local depends_blocks="$(mktemp -t depends_blocks.XXXXXX)"
     sed -nr \
         -e 's/^([[:alnum:]][[:alnum:].+-]+)$/\n\1/gp' \
-        -e 's/^ [ |]Depends: ([[:alnum:]][[:alnum:].+-]+)$/\1/gp' \
+        -e 's/^ [ |](Pre)?Depends: ([[:alnum:]][[:alnum:].+-]+)$/\2/gp' \
+        -e 's/^    ([[:alnum:]][[:alnum:].+-]+)$/\1/gp' \
         <"${apt_cache_depends}" >"${depends_blocks}"
 
     # From the depends blocks, create the adjacency list of the following form:
@@ -263,9 +263,18 @@ etc_apt_sources_list_d() {
     apt-config shell _ Dir _ Dir::Etc _ Dir::Etc::sourceparts | apt_config_path
 }
 
-# take a dir, use it to create and export a fake apt environment
+# create and export a fake apt environment in the given directory
+#
+# $1 : fake apt dir
 enfake_apt() {
-    local dirs="etc/apt var/cache/apt var/lib/apt var/lib/dpkg"
+    local apt_subdirs_list="$(mktemp -t apt_subdirs_list.XXXXXX)"
+    cat >"${apt_subdirs_list}" <<EOF
+etc/apt
+var/cache/apt
+var/lib/apt
+var/lib/dpkg
+var/log/apt
+EOF
     # we don't care when the following happens:
     #
     #     tar: var/cache/apt/archives/partial: Cannot open: Permission denied
@@ -276,10 +285,10 @@ enfake_apt() {
     #     tar: var/lib/dpkg/triggers/Lock: Cannot open: Permission denied
     #     tar: var/lib/dpkg/lock: Cannot open: Permission denied
     #     tar: Exiting with failure status due to previous errors
-    tar -cf- -C / ${dirs} | tar -xf- -C "$1"
+    xargs tar -cf- -C / <"${apt_subdirs_list}" | tar -xf- -C "$1"
     (
         cd "$1"
-        mkdir -vp ${dirs}
+        xargs mkdir -vp <"${apt_subdirs_list}"
     )
     export APT_CONFIG="$1/etc/apt/apt.conf"
     cat >"${APT_CONFIG}" <<EOF
@@ -312,29 +321,53 @@ apt_repolize() {
 deb     [trusted=yes] file://${PWD} ./
 EOF
     )
-    apt-get -y update
+    apt-get -yqo APT::Sandbox::User="$(whoami)" update
 }
 
 run_raw() {
-    # make a fake apt configuration that a luser can work
+    info "creating fake apt configuration"
     enfake_apt "$(mktemp -dt fake_apt_dir.XXXXXX)"
 
     # create/update fake apt repo in workdir; we don't care when the following
     # happens:
     #
     #     rm: cannot remove '/var/cache/apt/archives/partial/*.deb': Permission denied
+    info "repolizing ${workdir}"
     apt_repolize "${workdir}"
 
     # enumerate package edges; for each edge, the terminating node is the name
     # of a dependency; download every dependency
+    info "enumerating package edges"
     local package_edges="$(mktemp -t package_edges.XXXXXX)"
     packages2edges "${workdir}/Packages" >"${package_edges}"
+
+
+    info "enumerating package depends"
+    local package_depends="$(mktemp -t package_depends.XXXXXX)"
+    cut -f2 <"${package_edges}" >"${package_depends}"
+    sort -uo "${package_depends}" "${package_depends}"
+
+    info "enumerating package extants"
+    local package_extants="$(mktemp -t package_extants.XXXXXX)"
+    find "${workdir}" -type f -name '*.deb' \
+         -exec dpkg-deb --show --showformat='${Package}\n' {} \; \
+         >"${package_extants}"
+    sort -uo "${package_extants}" "${package_extants}"
+
+    info "enumerating package downloads"
+    local package_downloads="$(mktemp -t package_downloads.XXXXXX)"
+    comm -23 "${package_depends}" "${package_extants}" >"${package_downloads}"
+
+    info "downloading packages"
+    mkdir -vp "${workdir}/depends"
     (
-        cd "${workdir}"
-        cut -f2 "${package_edges}" | xargs apt-get download
+        cd "${workdir}/depends"
+        xargs apt-get download <"${package_downloads}"
     )
+    info "re-repolizing ${workdir}"
     apt_repolize "${workdir}"
 
+    info "generating install list"
     # generate the list of all packages
     local packages_all="$(mktemp -t packages_all.XXXXXX)"
     packages2names "${workdir}/Packages" >"${packages_all}"

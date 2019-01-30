@@ -2,7 +2,7 @@
 
 # scrippies/mkmegadeb
 
-set -euvx
+set -eu
 
 readonly this="$(readlink -f "$0")"
 readonly here="$(dirname "${this}")"
@@ -55,34 +55,91 @@ Examples:
 EOF
 }
 
+apt_config_path() {
+    cut -d= -f2 | xargs -n1 | paste -sd/ | xargs readlink -f
+}
+
+etc_apt() {
+    apt-config shell _ Dir _ Dir::Etc | apt_config_path
+}
+
+etc_apt_sources_list() {
+    apt-config shell _ Dir _ Dir::Etc _ Dir::Etc::sourcelist | apt_config_path
+}
+
+etc_apt_sources_list_d() {
+    apt-config shell _ Dir _ Dir::Etc _ Dir::Etc::sourceparts | apt_config_path
+}
+
+var_lib_apt_lists() {
+    apt-config shell _ Dir _ Dir::State _ Dir::State::lists | apt_config_path
+}
+
+# create and export a fake apt environment in the given directory
+#
+# $1 : fake apt dir
+enfake_apt() {
+    local apt_subdirs_list="$(mktemp -t apt_subdirs_list.XXXXXX)"
+    cat >"${apt_subdirs_list}" <<EOF
+etc/apt
+var/cache/apt
+var/lib/apt
+var/lib/dpkg
+var/log/apt
+EOF
+    # we don't care when the following happens:
+    #
+    #     tar: var/cache/apt/archives/partial: Cannot open: Permission denied
+    #     tar: var/cache/apt/archives/lock: Cannot open: Permission denied
+    #     tar: var/lib/apt/lists/partial: Cannot open: Permission denied
+    #     tar: var/lib/apt/lists/lock: Cannot open: Permission denied
+    #     tar: var/lib/dpkg/lock-frontend: Cannot open: Permission denied
+    #     tar: var/lib/dpkg/triggers/Lock: Cannot open: Permission denied
+    #     tar: var/lib/dpkg/lock: Cannot open: Permission denied
+    #     tar: Exiting with failure status due to previous errors
+    xargs tar -cf- -C / <"${apt_subdirs_list}" | tar -xf- -C "$1"
+    (
+        cd "$1"
+        xargs mkdir -vp <"${apt_subdirs_list}"
+    )
+    export APT_CONFIG="$1/etc/apt/apt.conf"
+    cat >"${APT_CONFIG}" <<EOF
+Dir "$1";
+EOF
+}
+
 run_megadeb() {
     env | sort
+    # vet the archive directory
+    if ! [ -f "${here}/Packages" ]; then
+        error "missing file: ${here}/Packages"
+        return 1
+    fi
 
-    # make a fake apt configuration that a luser can work
-    readonly fake_apt_dir="$(mktemp -dt fake_apt_dir.XXXXXX)"
-    tar -cf- -C / etc/apt var/lib/apt var/cache/apt var/log/apt | tar -xf- -C "${fake_apt_dir}"
-    export APT_CONFIG="${fake_apt_dir}/etc/apt/apt.conf"
-    cat >"${APT_CONFIG}" <<EOF
-Dir "${fake_apt_dir}";
-EOF
+    info "creating temporary apt configuration"
+    enfake_apt "$(mktemp -dt fake_apt_dir.XXXXXX)"
 
-    # create and populate the sources list file
-    readonly this_list="$(mktemp -u "${fake_apt_dir}/etc/apt/sources.list.d/$(basename "${this}").XXXXXX").list"
-    mkdir -vp "$(dirname "${this_list}")"
-    cat >"${this_list}" <<EOF
+    # remove old apt sources list files
+    find "$(etc_apt)" -type f -name '*.list' -print -delete
+    find "$(var_lib_apt_lists)" -type f -print -delete
+
+    # install new apt sources list file
+    cat >"$(etc_apt_sources_list_d)/$(echo "${here}" | tr -s '/' '_').list" <<EOF
 deb [trusted=yes] file://${here} ./
 EOF
 
     # update apt to make it aware of the new fake repo
-    apt-get -y update
+    apt-get -yqo APT::Sandbox::User="$(whoami)" update
 
     # if install-list.txt exists, then install those; else install everything
+    info "installing packages"
     if [ -f "${here}/install-list.txt" ]; then
         cat "${here}/install-list.txt"
     else
-        sed -nr 's|^Package: (.*)$|\1|gp' "${here}/Packages"
+        find "${here}" -maxdepth 1 -type f -name '*.deb' \
+             -exec dpkg-deb --show --showformat='${Package}\n' {} \;
     fi | xargs apt-get \
-        --yes \
+        -yqo APT::Sandbox::User="$(whoami)" \
         --no-install-recommends \
         --verbose-versions \
         install
