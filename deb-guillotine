@@ -80,6 +80,9 @@ deb_guillotine() {
             fi
         done
 
+        # delete empty directories
+        find . -type d -empty -print -delete
+
         # rebuild Debian binary package
         dpkg-deb --build . "${deb_file}"
     )
