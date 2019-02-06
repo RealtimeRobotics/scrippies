@@ -61,11 +61,11 @@ vet_pkgdir() {
     done <"${xpp_basename_list}"
 
     while read xpp; do
-        local xpp_clang_format="$(mktemp -t "clang_format_$(basename "${xpp}").XXXXXX")"
-        clang-format "${xpp}" >"${xpp_clang_format}"
-        if ! diff "${xpp}" "${xpp_clang_format}" >/dev/null; then
-            warning "clang-format ${xpp#${catkin_ws}/}"
-        fi
+        # local xpp_clang_format="$(mktemp -t "clang_format_$(basename "${xpp}").XXXXXX")"
+        # clang-format "${xpp}" >"${xpp_clang_format}"
+        # if ! diff "${xpp}" "${xpp_clang_format}" >/dev/null; then
+        #     warning "clang-format ${xpp#${catkin_ws}/}"
+        # fi
 
         local pkgincs="$(mktemp -t pkgincs.XXXXXX)"
         local sysincs="$(mktemp -t sysincs.XXXXXX)"
