@@ -1,0 +1,132 @@
+#!/bin/sh
+
+# rapidplan/scripts/vet-catkin-ws
+
+set -eu
+
+readonly this="$(readlink -f "$0")"
+readonly here="$(dirname "${this}")"
+readonly whatami="$(basename "${this}")"
+readonly tmpdir="$(mktemp -dt "${whatami}.XXXXXX")"
+
+log() { echo "${whatami}: $@" >&2; }
+error() { log "ERROR: $@"; }
+warning() {
+    warning_count="$((${warning_count:-0} + 1))"
+    log "WARNING: $@"
+}
+info() { log "INFO: $@"; }
+
+die() {
+    error "$@"
+    usage >&2
+    exit 1
+}
+
+cleanup() {
+    status="$?"
+    rm -rf "${tmpdir}"
+    return "${status}"
+}
+
+usage() {
+    cat <<EOF
+Usage: $(basename ${this}) CATKIN_WS...
+Vet the given catkin workspace(s).
+
+Options:
+
+    -h                 print usage and exit
+
+EOF
+}
+
+# $1 : pkgdir
+vet_pkgdir() {
+    local pkgdir="$1"
+    local cmakeliststxt="$1/CMakeLists.txt"
+
+    local xpp_list="$(mktemp -t xpp_list.XXXXXX)"
+    find "${pkgdir}" -type f \( -name '*.hpp' -o -name '*.cpp' \) >"${xpp_list}"    
+    sort -uo "${xpp_list}" "${xpp_list}"
+    
+    local xpp_basename_list="$(mktemp -t xpp_basename_list.XXXXXX)"
+    xargs -I{} basename {} <"${xpp_list}" >"${xpp_basename_list}"
+    sort -uo "${xpp_basename_list}" "${xpp_basename_list}"
+
+    while read xpp_basename; do
+        if ! grep -Eq "\b${xpp_basename}\b" "${cmakeliststxt}"; then
+            warning "${cmakeliststxt#${catkin_ws}/} MISSING: ${xpp_basename}"
+        fi
+    done <"${xpp_basename_list}"
+
+    while read xpp; do
+        local xpp_clang_format="$(mktemp -t "clang_format_$(basename "${xpp}").XXXXXX")"
+        clang-format "${xpp}" >"${xpp_clang_format}"
+        if ! diff "${xpp}" "${xpp_clang_format}" >/dev/null; then
+            warning "clang-format ${xpp#${catkin_ws}/}"
+        fi
+
+        local pkgincs="$(mktemp -t pkgincs.XXXXXX)"
+        local sysincs="$(mktemp -t sysincs.XXXXXX)"
+        sed -nr 's|^(#include "([[:graph:]]+)")$|\2\t\1|gp' <"${xpp}" >"${pkgincs}"
+        sed -nr 's|^(#include <([[:graph:]]+)>)$|\2\t\1|gp' <"${xpp}" >"${sysincs}"
+        sort -uo "${pkgincs}" "${pkgincs}"
+        sort -uo "${sysincs}" "${sysincs}"
+
+        # todo: do something with *.ui files?
+        sed -ri '/^ui_[[:graph:]]+\.h\t/d' "${pkgincs}"
+
+        # todo: warn about system include generated header?
+        sed -ri '/^ui_[[:graph:]]+\.h\t/d' "${sysincs}"
+
+        # foreach `#include "foo.h"`, `foo.h` should be in this package
+        while read pkginc match; do
+            if basename "${pkginc}" | grep -vqf "${xpp_basename_list}"; then
+                warning "-I should be -isystem: ${xpp#${catkin_ws}/}:$(grep -n "${match}" "${xpp}")"
+            fi
+        done <"${pkgincs}"
+
+        # foreach `#include <foo.h>`, `foo.h` should NOT be in this package
+        while read sysinc match; do
+            if basename "${sysinc}" | grep -qf "${xpp_basename_list}"; then
+                warning "-isystem should be -I: ${xpp#${catkin_ws}/}:$(grep -n "${match}" "${xpp}")"
+            fi
+        done <"${sysincs}"
+
+    done <"${xpp_list}"
+}
+
+################################################################################
+
+trap cleanup EXIT
+export TMPDIR="${tmpdir}"
+export LC_ALL=C
+
+for catkin_ws in ${@:-${PWD}}; do
+    if ! [ -d "${catkin_ws}" ]; then
+        error "missing directory: ${catkin_ws}"
+        continue
+    fi
+    if ! [ -d "${catkin_ws}/src" ]; then
+        error "missing directory: ${catkin_ws}/src"
+        continue
+    fi
+
+    pkgdir_list="$(mktemp -t pkgdir_list.XXXXXX)"
+    find "${catkin_ws}/src" \
+         -type f -name 'CMakeLists.txt' -exec grep -l catkin_package {} + \
+        | xargs dirname >"${pkgdir_list}"
+    sort -uo "${pkgdir_list}" "${pkgdir_list}"
+
+    while read pkgdir; do
+        vet_pkgdir "${pkgdir}"
+    done <"${pkgdir_list}"
+done
+
+if [ 0 -lt "${warning_count:-0}" ]; then
+    error "WARNING_COUNT: ${warning_count}"
+    exit 1
+fi
+
+exit "$?"
