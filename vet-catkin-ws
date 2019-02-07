@@ -1,6 +1,6 @@
 #!/bin/sh
 
-# rapidplan/scripts/vet-catkin-ws
+# scrippies/vet-catkin-ws
 
 set -eu
 
@@ -28,12 +28,13 @@ cleanup() {
 
 usage() {
     cat <<EOF
-Usage: $(basename ${this}) CATKIN_WS...
+Usage: $(basename ${this}) [OPTION]... CATKIN_WS...
 Vet the given catkin workspace(s).
 
 Options:
 
-    -h                 print usage and exit
+    -h    print usage and exit
+    -f    try to fix things
 
 EOF
 }
