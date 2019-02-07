@@ -11,10 +11,7 @@ readonly tmpdir="$(mktemp -dt "${whatami}.XXXXXX")"
 
 log() { echo "${whatami}: $@" >&2; }
 error() { log "ERROR: $@"; }
-warning() {
-    warning_count="$((${warning_count:-0} + 1))"
-    log "WARNING: $@"
-}
+warning() { log "WARNING: $@"; }
 info() { log "INFO: $@"; }
 
 die() {
@@ -46,19 +43,40 @@ vet_pkgdir() {
     local pkgdir="$1"
     local cmakeliststxt="$1/CMakeLists.txt"
 
+    local incdir="$(find "${pkgdir}" -maxdepth 1 -type d -name 'inc')"
+    local srcdir="$(find "${pkgdir}" -maxdepth 1 -type d -name 'src')"
+    
+    local inc_relpath_list="$(mktemp -t inc_relpath_list.XXXXXX)"
+    local src_relpath_list="$(mktemp -t src_relpath_list.XXXXXX)"
+
+    if [ -n "${incdir}" ]; then
+        find "${incdir}" -type f -name '*.hpp' | sed "s|${incdir}/||g" >"${inc_relpath_list}"
+    fi
+    if [ -n "${srcdir}" ]; then
+        find "${srcdir}" -type f -name '*.cpp' | sed "s|${srcdir}/||g" >"${src_relpath_list}"
+    fi
+
+    sort -uo "${inc_relpath_list}" "${inc_relpath_list}"
+    sort -uo "${src_relpath_list}" "${src_relpath_list}"
+
+    # info ""
+    # info "${pkgdir}"
+    # info "${incdir}"
+    # while read hpp; do info "  ${hpp}"; done <"${inc_relpath_list}"
+    # info "${srcdir}"
+    # while read cpp; do info "  ${cpp}"; done <"${src_relpath_list}"
+
     local xpp_list="$(mktemp -t xpp_list.XXXXXX)"
-    find "${pkgdir}" -type f \( -name '*.hpp' -o -name '*.cpp' \) >"${xpp_list}"    
+    find "${pkgdir}" -type f \( -name '*.hpp' -o -name '*.cpp' \) >"${xpp_list}"
     sort -uo "${xpp_list}" "${xpp_list}"
     
-    local xpp_basename_list="$(mktemp -t xpp_basename_list.XXXXXX)"
-    xargs -I{} basename {} <"${xpp_list}" >"${xpp_basename_list}"
-    sort -uo "${xpp_basename_list}" "${xpp_basename_list}"
-
-    while read xpp_basename; do
+    while read xpp; do
+        local xpp_basename="$(basename "${xpp}")"
         if ! grep -Eq "\b${xpp_basename}\b" "${cmakeliststxt}"; then
+            bad_count="$((${bad_count:-0} + 1))"
             warning "${cmakeliststxt#${catkin_ws}/} MISSING: ${xpp_basename}"
         fi
-    done <"${xpp_basename_list}"
+    done <"${xpp_list}"
 
     while read xpp; do
         # local xpp_clang_format="$(mktemp -t "clang_format_$(basename "${xpp}").XXXXXX")"
@@ -80,17 +98,27 @@ vet_pkgdir() {
         # todo: warn about system include generated header?
         sed -ri '/^ui_[[:graph:]]+\.h\t/d' "${sysincs}"
 
-        # foreach `#include "foo.h"`, `foo.h` should be in this package
+        # foreach `#include "foo.h"`, complain if `foo.h` not in this package
         while read pkginc match; do
-            if basename "${pkginc}" | grep -vqf "${xpp_basename_list}"; then
+            if ! echo "${pkginc}" | grep -qFf "${inc_relpath_list}"; then
+                bad_count="$((${bad_count:-0} + 1))"
                 warning "-I should be -isystem: ${xpp#${catkin_ws}/}:$(grep -n "${match}" "${xpp}")"
+                if [ "true" = "${try_fix:-false}" ]; then
+                    fix_count="$((${fix_count:-0} + 1))"
+                    sed -ri "s|#include \"${pkginc}\"|#include <${pkginc}>|" "${xpp}"
+                fi
             fi
         done <"${pkgincs}"
 
         # foreach `#include <foo.h>`, `foo.h` should NOT be in this package
         while read sysinc match; do
-            if basename "${sysinc}" | grep -qf "${xpp_basename_list}"; then
+            if echo "${sysinc}" | grep -qFf "${inc_relpath_list}"; then
+                bad_count="$((${bad_count:-0} + 1))"
                 warning "-isystem should be -I: ${xpp#${catkin_ws}/}:$(grep -n "${match}" "${xpp}")"
+                if [ "true" = "${try_fix:-false}" ]; then
+                    fix_count="$((${fix_count:-0} + 1))"
+                    sed -ri "s|#include <${sysinc}>|#include \"${sysinc}\"|" "${xpp}"
+                fi
             fi
         done <"${sysincs}"
 
@@ -102,6 +130,19 @@ vet_pkgdir() {
 trap cleanup EXIT
 export TMPDIR="${tmpdir}"
 export LC_ALL=C
+
+while getopts ":hf" opt; do
+    case "${opt}" in
+        h)
+            usage
+            exit 0
+            ;;
+        f) try_fix="true" ;;
+        :) die "missing argument: -${OPTARG}" ;;
+        \?) die "bad option: -${OPTARG}" ;;
+    esac
+done
+shift "$((${OPTIND} - 1))"
 
 for catkin_ws in ${@:-${PWD}}; do
     if ! [ -d "${catkin_ws}" ]; then
@@ -124,8 +165,9 @@ for catkin_ws in ${@:-${PWD}}; do
     done <"${pkgdir_list}"
 done
 
-if [ 0 -lt "${warning_count:-0}" ]; then
-    error "WARNING_COUNT: ${warning_count}"
+if [ 0 -lt "${bad_count:-0}" ]; then
+    error "BAD_COUNT: ${bad_count}"
+    info "FIX COUNT: ${fix_count:-0}"
     exit 1
 fi
 
