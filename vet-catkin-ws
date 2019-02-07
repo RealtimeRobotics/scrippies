@@ -45,7 +45,7 @@ vet_pkgdir() {
 
     local incdir="$(find "${pkgdir}" -maxdepth 1 -type d -name 'inc')"
     local srcdir="$(find "${pkgdir}" -maxdepth 1 -type d -name 'src')"
-    
+
     local inc_relpath_list="$(mktemp -t inc_relpath_list.XXXXXX)"
     local src_relpath_list="$(mktemp -t src_relpath_list.XXXXXX)"
 
@@ -69,7 +69,7 @@ vet_pkgdir() {
     local xpp_list="$(mktemp -t xpp_list.XXXXXX)"
     find "${pkgdir}" -type f \( -name '*.hpp' -o -name '*.cpp' \) >"${xpp_list}"
     sort -uo "${xpp_list}" "${xpp_list}"
-    
+
     while read xpp; do
         local xpp_basename="$(basename "${xpp}")"
         if ! grep -Eq "\b${xpp_basename}\b" "${cmakeliststxt}"; then
@@ -156,7 +156,7 @@ for catkin_ws in ${@:-${PWD}}; do
 
     pkgdir_list="$(mktemp -t pkgdir_list.XXXXXX)"
     find "${catkin_ws}/src" \
-         -type f -name 'CMakeLists.txt' -exec grep -l catkin_package {} + \
+        -type f -name 'CMakeLists.txt' -exec grep -l catkin_package {} + \
         | xargs dirname >"${pkgdir_list}"
     sort -uo "${pkgdir_list}" "${pkgdir_list}"
 
