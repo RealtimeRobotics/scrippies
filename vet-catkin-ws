@@ -59,13 +59,6 @@ vet_pkgdir() {
     sort -uo "${inc_relpath_list}" "${inc_relpath_list}"
     sort -uo "${src_relpath_list}" "${src_relpath_list}"
 
-    # info ""
-    # info "${pkgdir}"
-    # info "${incdir}"
-    # while read hpp; do info "  ${hpp}"; done <"${inc_relpath_list}"
-    # info "${srcdir}"
-    # while read cpp; do info "  ${cpp}"; done <"${src_relpath_list}"
-
     local xpp_list="$(mktemp -t xpp_list.XXXXXX)"
     find "${pkgdir}" -type f \( -name '*.hpp' -o -name '*.cpp' \) >"${xpp_list}"
     sort -uo "${xpp_list}" "${xpp_list}"
@@ -79,11 +72,18 @@ vet_pkgdir() {
     done <"${xpp_list}"
 
     while read xpp; do
-        # local xpp_clang_format="$(mktemp -t "clang_format_$(basename "${xpp}").XXXXXX")"
-        # clang-format "${xpp}" >"${xpp_clang_format}"
-        # if ! diff "${xpp}" "${xpp_clang_format}" >/dev/null; then
-        #     warning "clang-format ${xpp#${catkin_ws}/}"
-        # fi
+        if false && command -v clang-format >/dev/null 2>&1; then
+            local xpp_clang_format="$(mktemp -t "clang_format_$(basename "${xpp}").XXXXXX")"
+            clang-format "${xpp}" >"${xpp_clang_format}"
+            if ! diff "${xpp}" "${xpp_clang_format}" >/dev/null; then
+                bad_count="$((${bad_count:-0} + 1))"
+                warning "clang-format ${xpp#${catkin_ws}/}"
+                if [ "true" = "${try_fix:-false}" ]; then
+                    fix_count="$((${fix_count:-0} + 1))"
+                    clang-format -i "${xpp}"
+                fi
+            fi
+        fi
 
         local pkgincs="$(mktemp -t pkgincs.XXXXXX)"
         local sysincs="$(mktemp -t sysincs.XXXXXX)"
@@ -167,7 +167,9 @@ done
 
 if [ 0 -lt "${bad_count:-0}" ]; then
     error "BAD_COUNT: ${bad_count}"
-    info "FIX COUNT: ${fix_count:-0}"
+    if [ 0 -lt "${fix_count:-0}" ]; then
+        info "FIX COUNT: ${fix_count:-0}"
+    fi
     exit 1
 fi
 
