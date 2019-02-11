@@ -61,17 +61,23 @@ vet_pkgdir() {
     sort -uo "${src_relpath_list}" "${src_relpath_list}"
 
     local xpp_list="$(mktemp -t xpp_list.XXXXXX)"
+
     find "${pkgdir}" -type f \( -name '*.hpp' -o -name '*.cpp' \) >"${xpp_list}"
     sort -uo "${xpp_list}" "${xpp_list}"
-
     while read xpp; do
         local xpp_basename="$(basename "${xpp}")"
         if ! grep -Eq "\b${xpp_basename}\b" "${cmakeliststxt}"; then
             bad_count="$((${bad_count:-0} + 1))"
             warning "${cmakeliststxt#${catkin_ws}/} MISSING: ${xpp_basename}"
+            if [ "true" = "${try_fix:-false}" ]; then
+                fix_count="$((${fix_count:-0} + 1))"
+                info "$(rm -vf ${xpp})"
+            fi
         fi
     done <"${xpp_list}"
 
+    find "${pkgdir}" -type f \( -name '*.hpp' -o -name '*.cpp' \) >"${xpp_list}"
+    sort -uo "${xpp_list}" "${xpp_list}"
     while read xpp; do
         if false && command -v clang-format >/dev/null 2>&1; then
             local xpp_clang_format="$(mktemp -t "clang_format_$(basename "${xpp}").XXXXXX")"
