@@ -341,7 +341,6 @@ run_raw() {
     local package_edges="$(mktemp -t package_edges.XXXXXX)"
     packages2edges "${workdir}/Packages" >"${package_edges}"
 
-
     info "enumerating package depends"
     local package_depends="$(mktemp -t package_depends.XXXXXX)"
     cut -f2 <"${package_edges}" >"${package_depends}"
@@ -350,8 +349,8 @@ run_raw() {
     info "enumerating package extants"
     local package_extants="$(mktemp -t package_extants.XXXXXX)"
     find "${workdir}" -type f -name '*.deb' \
-         -exec dpkg-deb --show --showformat='${Package}\n' {} \; \
-         >"${package_extants}"
+        -exec dpkg-deb --show --showformat='${Package}\n' {} \; \
+        >"${package_extants}"
     sort -uo "${package_extants}" "${package_extants}"
 
     info "enumerating package downloads"
@@ -384,6 +383,41 @@ run_raw() {
     # set-subtract from all packages the scc packages to give "weakly connected
     # component" packages; i.e., the list of packages to install
     comm -23 "${packages_all}" "${packages_scc}" >"${workdir}/install-list.txt"
+
+    #####################
+    # LAWYER CHOW BEGIN #
+    #####################
+    info "generating top package list"
+    local packages_top="$(mktemp -t packages_top.XXXXXX)"
+    find "${workdir}" -maxdepth 1 -type f -name '*.deb' \
+        -exec dpkg-deb --field {} 'Package' \; >"${packages_top}"
+    sort -uo "${packages_top}" "${packages_top}"
+
+    info "generating top depends list"
+    local depends_top="$(mktemp -t depends_top.XXXXXX)"
+    find "${workdir}" -maxdepth 1 -type f -name '*.deb' \
+        -exec dpkg-deb --field {} 'Depends' \; >"${depends_top}"
+    sed -ri 's|,[[:space:]]+|\n|g' "${depends_top}"
+    sed -ri 's|^([[:graph:]]+).*|\1|g' "${depends_top}"
+    sed -ri '/^[[:space:]]*$/d' "${depends_top}"
+    sort -uo "${depends_top}" "${depends_top}"
+
+    info "generating build depends list"
+    local build_depends_top="$(mktemp -t build_depends_top.XXXXXX)"
+    find "${workdir}" -maxdepth 1 -type f -name '*.dsc' \
+        -exec sed -nr 's|^Build-Depends: (.*)$|\1|gp' {} + >"${build_depends_top}"
+    sed -ri 's|,[[:space:]]+|\n|g' "${build_depends_top}"
+    sed -ri 's|^([[:graph:]]+).*|\1|g' "${build_depends_top}"
+    sed -ri '/^[[:space:]]*$/d' "${build_depends_top}"
+    sort -uo "${build_depends_top}" "${build_depends_top}"
+
+    info "generating third-party depends lists"
+    comm -13 "${packages_top}" "${depends_top}" >"${workdir}/third-party-depends-shallow.txt"
+    comm -13 "${packages_top}" "${packages_all}" >"${workdir}/third-party-depends-recurse.txt"
+    comm -13 "${packages_top}" "${build_depends_top}" >"${workdir}/third-party-build-depends.txt"
+    ###################
+    # LAWYER CHOW END #
+    ###################
 }
 
 run_dockerized() {
