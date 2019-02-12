@@ -149,6 +149,22 @@ packages2names() {
         "${@:-/dev/stdin}"
 }
 
+# read package names from stdin, print recursive depends packages to stdout
+apt_cache_depends_recurse() {
+    xargs apt-cache depends \
+        --recurse \
+        --no-recommends \
+        --no-suggests \
+        --no-conflicts \
+        --no-breaks \
+        --no-replaces \
+        --no-enhances \
+        | sed -nr \
+            -e 's/^([[:alnum:]][[:alnum:].+-]+)$/\n\1/gp' \
+            -e 's/^ [ |](Pre)?Depends: ([[:alnum:]][[:alnum:].+-]+)$/\2/gp' \
+            -e 's/^    ([[:alnum:]][[:alnum:].+-]+)$/\1/gp'
+}
+
 # given Packages file, print dependency edges
 #
 # $1 : Packages file
@@ -324,6 +340,13 @@ EOF
     apt-get -yqo APT::Sandbox::User="$(whoami)" update
 }
 
+ctrlval_clean() {
+    sed -r 's|,[[:space:]]+|\n|g' \
+        | sed -r 's|^([[:graph:]]+).*|\1|g' \
+        | sed -r '/^[[:space:]]*$/d' \
+        | sort -u
+}
+
 run_raw() {
     info "creating fake apt configuration"
     enfake_apt "$(mktemp -dt fake_apt_dir.XXXXXX)"
@@ -390,31 +413,39 @@ run_raw() {
     info "generating top package list"
     local packages_top="$(mktemp -t packages_top.XXXXXX)"
     find "${workdir}" -maxdepth 1 -type f -name '*.deb' \
-        -exec dpkg-deb --field {} 'Package' \; >"${packages_top}"
-    sort -uo "${packages_top}" "${packages_top}"
+        -exec dpkg-deb --field {} 'Package' \; \
+        | sort -u >"${packages_top}"
 
-    info "generating top depends list"
-    local depends_top="$(mktemp -t depends_top.XXXXXX)"
+    # from *.deb files to run_deps_shallow
+    info "generating run-deps-shallow.txt"
+    local run_deps_shallow="$(mktemp -t run_deps_shallow.XXXXXX)"
     find "${workdir}" -maxdepth 1 -type f -name '*.deb' \
-        -exec dpkg-deb --field {} 'Depends' \; >"${depends_top}"
-    sed -ri 's|,[[:space:]]+|\n|g' "${depends_top}"
-    sed -ri 's|^([[:graph:]]+).*|\1|g' "${depends_top}"
-    sed -ri '/^[[:space:]]*$/d' "${depends_top}"
-    sort -uo "${depends_top}" "${depends_top}"
+        -exec dpkg-deb --field {} 'Depends' \; \
+        | ctrlval_clean >"${run_deps_shallow}"
 
-    info "generating build depends list"
-    local build_depends_top="$(mktemp -t build_depends_top.XXXXXX)"
+    # from run_deps_shallow to run_deps_recurse
+    info "generating run-deps-recurse.txt"
+    local run_deps_recurse="$(mktemp -t run_deps_recurse.XXXXXX)"
+    apt_cache_depends_recurse <"${run_deps_shallow}" \
+        | ctrlval_clean >"${run_deps_recurse}"
+
+    # from *.dsc files to build_deps_shallow
+    info "generating build-deps-shallow.txt"
+    local build_deps_shallow="$(mktemp -t build_deps_shallow.XXXXXX)"
     find "${workdir}" -maxdepth 1 -type f -name '*.dsc' \
-        -exec sed -nr 's|^Build-Depends: (.*)$|\1|gp' {} + >"${build_depends_top}"
-    sed -ri 's|,[[:space:]]+|\n|g' "${build_depends_top}"
-    sed -ri 's|^([[:graph:]]+).*|\1|g' "${build_depends_top}"
-    sed -ri '/^[[:space:]]*$/d' "${build_depends_top}"
-    sort -uo "${build_depends_top}" "${build_depends_top}"
+        -exec sed -nr 's|^Build-Depends: (.*)$|\1|gp' {} + \
+        | ctrlval_clean >"${build_deps_shallow}"
 
-    info "generating third-party depends lists"
-    comm -13 "${packages_top}" "${depends_top}" >"${workdir}/third-party-depends-shallow.txt"
-    comm -13 "${packages_top}" "${packages_all}" >"${workdir}/third-party-depends-recurse.txt"
-    comm -13 "${packages_top}" "${build_depends_top}" >"${workdir}/third-party-build-depends.txt"
+    # from build_deps_shallow to build_deps_recurse
+    info "generating build deps recurse"
+    local build_deps_recurse="$(mktemp -t build_deps_recurse.XXXXXX)"
+    apt_cache_depends_recurse <"${build_deps_shallow}" \
+        | ctrlval_clean >"${build_deps_recurse}"
+
+    comm -13 "${packages_top}" "${run_deps_shallow}" >"${workdir}/third-party-run-deps-shallow.txt"
+    comm -13 "${packages_top}" "${run_deps_recurse}" >"${workdir}/third-party-run-deps-recurse.txt"
+    comm -13 "${packages_top}" "${build_deps_shallow}" >"${workdir}/third-party-build-deps-shallow.txt"
+    comm -13 "${packages_top}" "${build_deps_recurse}" >"${workdir}/third-party-build-deps-recurse.txt"
     ###################
     # LAWYER CHOW END #
     ###################
