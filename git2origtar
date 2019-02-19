@@ -38,11 +38,11 @@ Options
 
 Examples:
 
-    \$ ./$(basename ${this}) >rapidplan.tar
+    \$ ./$(basename ${this})
 
-    \$ ./$(basename ${this}) -C ~/code/rapidplan >rapidplan.tar
+    \$ ./$(basename ${this}) -C ~/code/rapidplan
 
-    \$ ./$(basename ${this}) -C ~/code/rapidplan -o rapidplan.tar
+    \$ ./$(basename ${this}) -C ~/code/rapidplan -o rapidplan.orig.tar
 
 EOF
 }
