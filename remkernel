@@ -1,0 +1,84 @@
+#!/bin/sh
+
+# scrippies/remkernel
+
+# Remove unused kernels between the currently-running and the latest.
+
+set -euvx
+
+readonly this="$(readlink -f "$0")"
+readonly here="$(dirname "${this}")"
+readonly whatami="$(basename "${here}").$(basename "${this}")"
+readonly tmpdir="$(mktemp -dt "${whatami}.XXXXXX")"
+
+info() { logger -s -t "${whatami}[$$]" -p user.info "INFO:    $@"; }
+warning() { logger -s -t "${whatami}[$$]" -p user.warning "WARNING: $@"; }
+error() { logger -s -t "${whatami}[$$]" -p user.error "ERROR:   $@"; }
+
+die() {
+    error "$@"
+    exit 1
+}
+
+cleanup() {
+    status="$?"
+    rm -rf "${tmpdir}"
+    return "${status}"
+}
+
+is_sudo() {
+    true \
+        && [ "${USER:-}" = "root" ] \
+        && [ "${SUDO_USER:-}" != "root" ] \
+        && [ "" ]
+}
+
+########################
+# #################### #
+# # REAL WORK BEGINS # #
+# #################### #
+########################
+
+trap cleanup EXIT
+export TMPDIR="${tmpdir}"
+export LC_ALL=C
+
+readonly version_current="$(uname -r)"
+readonly version_latest="$(find /boot -maxdepth 1 -type f -name 'vmlinuz-*' | sort -V | tail -1 | cut -d- -f2-)"
+
+readonly boot_list="$(mktemp -t boot.list.XXXXXX)"
+readonly keep_list="$(mktemp -t keep.list.XXXXXX)"
+readonly stem_list="$(mktemp -t stem.list.XXXXXX)"
+readonly mybe_list="$(mktemp -t mybe.list.XXXXXX)"
+readonly kill_list="$(mktemp -t kill.list.XXXXXX)"
+
+# construct list of all /boot/ files and "keep" list
+find /boot -maxdepth 1 -type f >"${boot_list}"
+grep -E "(${version_current}|${version_latest})" <"${boot_list}" >"${keep_list}"
+sort -uo "${keep_list}" "${keep_list}"
+
+# construct list of filename stems from the "keep" list
+xargs -I{} basename {} <"${keep_list}" | cut -d- -f1 | sort -u >"${stem_list}"
+
+# construct list of "maybe" files that have interesting stems
+grep -Ff "${stem_list}" <"${boot_list}" >"${mybe_list}"
+sort -uo "${mybe_list}" "${mybe_list}"
+
+# "maybe" files that are not "keep" files become "kill" files
+comm -23 "${mybe_list}" "${keep_list}" >"${kill_list}"
+
+if ! [ -s "${kill_list}" ]; then
+    warning "nothing to remove"
+fi
+
+# find the packages that provide the "kill" files; add them to the purge list
+readonly purge_list="$(mktemp -t purge.list.XXXXXX)"
+xargs -r dpkg -S <"${kill_list}" | cut -d: -f1 | sort -u >"${purge_list}"
+
+# purge the packages in the purge list
+dpkg --configure -a
+apt-get -y update
+xargs -r apt-get -yf purge <"${purge_list}"
+apt-get -y autoremove
+apt-get -y autoclean
+apt-get install -fy
