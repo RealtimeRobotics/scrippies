@@ -90,7 +90,7 @@ is_good_package_name() {
 }
 
 is_good_version() {
-    echo $@ | grep -Eq '^[[:digit:]]+\.[[:digit:]]+\.[[:digit:]]+-[[:digit:]]+-g[[:xdigit:]]{7}$'
+    echo $@ | grep -Eq '^[[:digit:]]+\.[[:digit:]]+\.[[:digit:]]+-[[:digit:]]+-g[[:xdigit:]]{7,40}$'
 }
 
 # $1 : git checkout directory
