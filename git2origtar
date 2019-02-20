@@ -34,15 +34,15 @@ From a git checkout, create an orig tarball.
 Options
     -h            print this usage and return success
     -C WORKDIR    run as if started in WORKDIR (default: \$PWD)
-    -o OUTFILE    write to OUTFILE (default: \$(basename \$WORKDIR)_$(git -C \$WORKDIR describe --long --always).orig.tar)
+    -o OUTFILE    write to OUTFILE (default: \$(basename \$WORKDIR)_\$(git -C \$WORKDIR describe --long --always).orig.tar)
 
 Examples:
 
-    \$ ./$(basename ${this})
+    \$ $0
 
-    \$ ./$(basename ${this}) -C ~/code/rapidplan
+    \$ $0 -C ~/code/rapidplan
 
-    \$ ./$(basename ${this}) -C ~/code/rapidplan -o rapidplan.orig.tar
+    \$ $0 -C ~/code/rapidplan -o rapidplan.orig.tar
 
 EOF
 }
@@ -152,7 +152,10 @@ fi
 
 # outfile
 if ! [ -n "${outfile:-}" ]; then
-    readonly outfile="$(get_default_outfile "${workdir}")"
+    if ! outfile="$(get_default_outfile "${workdir}")"; then
+        die "FAILURE: get_default_outfile ${workdir}"
+    fi
+    readonly outfile="${outfile}"
     warning "defaulting outfile: ${outfile}"
 fi
 if [ -f "${outfile}" ]; then
