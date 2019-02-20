@@ -78,7 +78,6 @@ gitcopy() {
         "git archive --prefix=\${sm_path}/ \${sha1} | tar -C ${2:-${PWD}} -xf-"
 }
 
-
 # > Package names (both source and binary, see Package) must consist only of
 # > lower case letters (a-z), digits (0-9), plus (+) and minus (-) signs, and
 # > periods (.). They must be at least two characters long and must start with
@@ -163,6 +162,8 @@ if [ -f "${outfile}" ]; then
     warning "$(rm -v "${outfile}")"
 fi
 
+# unix time stamp for HEAD commit
+readonly ts="$(git -C "${workdir}" show -s --format=%ct HEAD)"
 (
     cd "$(mktemp -d)"
     gitcopy "${workdir}"
@@ -170,7 +171,14 @@ fi
     find . ! -type d \
         | sort \
         | sed 's/./\\&/g' \
-        | xargs tar -rf "${OLDPWD}/${outfile}"
+        | xargs tar \
+            --numeric-owner \
+            --owner=0 \
+            --group=0 \
+            --format=pax \
+            --pax-option "exthdr.name=%d/PaxHeaders/%f,atime:=${ts},ctime:=${ts},mtime:=${ts}" \
+            --mtime=@"${ts}" \
+            -rf "${OLDPWD}/${outfile}"
 )
 
 echo "${outfile}"
