@@ -29,12 +29,12 @@ cleanup() {
 usage() {
     cat <<EOF
 Usage: $(basename ${this}) [OPTION]...
-From a git checkout, create an orig tarball.
+From a git checkout, create an orig tarball and print its path.
 
 Options
     -h            print this usage and return success
     -C WORKDIR    run as if started in WORKDIR (default: \$PWD)
-    -o OUTFILE    write to OUTFILE (default: \$(basename \$WORKDIR)_\$(git -C \$WORKDIR describe --long --always).orig.tar)
+    -o OUTFILE    write to OUTFILE (default: \$PWD/\$(basename \$WORKDIR)_\$(git -C \$WORKDIR describe --long --always).orig.tar)
 
 Examples:
 
@@ -104,7 +104,7 @@ get_default_outfile() {
         error "bad version: ${version}"
         return 1
     fi
-    echo "${package_name}_${version}.orig.tar"
+    echo "${PWD}/${package_name}_${version}.orig.tar"
 }
 
 ################################################################################
@@ -178,7 +178,7 @@ readonly ts="$(git -C "${workdir}" show -s --format=%ct HEAD)"
             --format=pax \
             --pax-option "exthdr.name=%d/PaxHeaders/%f,atime:=${ts},ctime:=${ts},mtime:=${ts}" \
             --mtime=@"${ts}" \
-            -rf "${OLDPWD}/${outfile}"
+            -rf "${outfile}"
 )
 
 echo "${outfile}"
