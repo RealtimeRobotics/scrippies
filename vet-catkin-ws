@@ -99,6 +99,9 @@ vet_pkgdir() {
         sort -uo "${pkgincs}" "${pkgincs}"
         sort -uo "${sysincs}" "${sysincs}"
 
+        # todo: do something with config.h files?
+        sed -ri '/^config\.h\t/d' "${pkgincs}"
+
         # todo: do something with *.ui files?
         sed -ri '/^ui_[[:graph:]]+\.h\t/d' "${pkgincs}"
 
