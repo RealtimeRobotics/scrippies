@@ -109,13 +109,15 @@ git lfs install --system
 # JENKINS AGENT BEGIN #
 #######################
 
-useradd \
-    --create-home \
-    --groups docker \
-    --home-dir /var/jenkins \
-    --shell /bin/sh \
-    --system \
-    jenkins
+if ! id -u jenkins; then
+    useradd \
+        --create-home \
+        --groups docker \
+        --home-dir /var/jenkins \
+        --shell /bin/sh \
+        --system \
+        jenkins
+fi
 
 readonly jenkins_auth_keys="/var/jenkins/.ssh/authorized_keys"
 mkdir -vp "$(dirname "${jenkins_auth_keys}")"
