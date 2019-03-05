@@ -117,6 +117,14 @@ useradd \
     --system \
     jenkins
 
+readonly jenkins_auth_keys="/var/jenkins/.ssh/authorized_keys"
+mkdir -vp "$(dirname "${jenkins_auth_keys}")"
+cat >"${jenkins_auth_keys}" <<EOF
+ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQC80KltG71YkbzdfNRDDBTjdm0le5LZB2tYUTbXtrQcu03MdddCGBkrB8YOcnf9WJvdxqWb2y83buDRAw3rZvRLV76ht2VFnJ85ZFbYo6CoYW7Tywlx6sTKO/Ch9CDzkpExuuiJTX5NDBOmw+APCayyRxN7YQha6zudEWApp5J4P2WoA6gXjbIErkMDBGtYL0XahLEQyQczqm0WznqA9HS2uoXw/ayNhWJZixJqjTNDj2GEDkb3yuZRVVhGagbHc/U2DOwLEBcag6ykTXvLy4z6WnRgCHGeet9iV2zlzDDYbiEWe8vcLd4PABK46+XYfFmFht2b/2tzOb9CtePX6jQt /srv/jenkins/jenkins-slave-agent-key
+EOF
+chown -v jenkins:jenkins "${jenkins_auth_keys}"
+chmod -v 0600 "${jenkins_auth_keys}"
+
 #####################
 # JENKINS AGENT END #
 #####################
