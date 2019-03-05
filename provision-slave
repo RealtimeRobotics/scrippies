@@ -99,6 +99,7 @@ curl -fsSL https://packagecloud.io/install/repositories/github/git-lfs/script.de
 chmod +x "${script_deb_sh}"
 "${script_deb_sh}"
 apt-get -y install git-lfs
+git lfs install --system
 
 #######################
 # INSTALL GIT-LFS END #
