@@ -41,12 +41,13 @@ Examples:
 EOF
 }
 
-# spit() {
-#     ls -lah "$@"
-#     file -bz "$@"
-#     sha1sum "$@"
-#     ar -vt "$@"
-# }
+spit() {
+    return
+    ls -lah "$@"
+    file -bz "$@"
+    sha1sum "$@"
+    ar -vt "$@"
+}
 
 normalize_deb() {
     local deb_file=""
@@ -90,7 +91,7 @@ normalize_deb() {
         return 1
     fi
 
-    # spit "${deb_file}"
+    spit "${deb_file}"
     (
         cd "$(mktemp -dt "$(basename "${deb_file}").XXXXXX")"
         ar x "${deb_file}" debian-binary "${control_tar}" "${data_tar}"
@@ -98,9 +99,24 @@ normalize_deb() {
         "${here}/normalize-tarball" "${data_tar}"
         # sha1sum debian-binary "${control_tar}" "${data_tar}"
         rm "${deb_file}"
+
+
+        # > c : Create the archive. The specified archive is always created if
+        # > it did not exist, when you request an update.But a warning is
+        # > issued unless you specify in advance that you expect to create it,
+        # > by using this modifier.
+        #
+        # > D : Operate in deterministic mode.  When adding files and the
+        # > archive index use zero for UIDs, GIDs, timestamps, and use
+        # > consistent file modes for all files.  When this option is used, if
+        # > ar is used with identical options and identical input files,
+        # > multiple runs will create identical output files regardless of the
+        # > input files' owners, groups, file modes, or modification times.
+        #
+        # --- man 1 ar
         ar rDc "${deb_file}" debian-binary "${control_tar}" "${data_tar}"
     )
-    # spit "${deb_file}"
+    spit "${deb_file}"
 }
 
 ################################################################################
