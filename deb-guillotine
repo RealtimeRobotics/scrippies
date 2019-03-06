@@ -72,7 +72,7 @@ deb_guillotine() {
         fi
 
         # enumerate headers, apply whitelist
-        find . -type f -name '*.hpp' | sort | while read header; do
+        find . -type f -regextype posix-extended -iregex '.*\.h(h|pp)?' | sort | while read header; do
             if basename "${header}" | grep -qFxf "${whitelist_headers}"; then
                 info "keeping: '${header}'"
             else
