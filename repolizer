@@ -6,7 +6,7 @@ set -eu
 
 readonly this="$(readlink -f "$0")"
 readonly here="$(dirname "${this}")"
-readonly whatami="$(basename "${here}").$(basename "${this}")"
+readonly whatami="$(basename "${this}")"
 readonly tmpdir="$(mktemp -dt "${whatami}.XXXXXX")"
 
 readonly default_distribution="xenial"
@@ -384,7 +384,7 @@ run_raw() {
     mkdir -vp "${workdir}/depends"
     (
         cd "${workdir}/depends"
-        xargs apt-get download <"${package_downloads}"
+        xargs -r apt-get download <"${package_downloads}"
     )
     info "re-repolizing ${workdir}"
     apt_repolize "${workdir}"
