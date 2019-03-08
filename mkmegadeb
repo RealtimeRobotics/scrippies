@@ -109,6 +109,10 @@ EOF
 }
 
 run_megadeb() {
+    if [ -x "${here}/hooks/preinst" ]; then
+        "${here}/hooks/preinst"
+    fi
+
     env | sort
     # vet the archive directory
     if ! [ -f "${here}/Packages" ]; then
@@ -143,6 +147,10 @@ EOF
         --no-install-recommends \
         --verbose-versions \
         install
+
+    if [ -x "${here}/hooks/postinst" ]; then
+        "${here}/hooks/postinst"
+    fi
 }
 
 build_megadeb() {
