@@ -63,6 +63,7 @@ apt-get -y update
 apt-get -y install --no-install-recommends \
      apt-transport-https \
      curl \
+     default-jre-headless \
      lsb-release \
      software-properties-common
 
