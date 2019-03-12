@@ -65,6 +65,7 @@ apt-get -y install --no-install-recommends \
      curl \
      default-jre-headless \
      lsb-release \
+     nfs-common \
      software-properties-common
 
 readonly docker_gpg="$(mktemp -t docker.gpg.XXXXXX)"
