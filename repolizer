@@ -390,22 +390,28 @@ run_raw() {
     apt_repolize "${workdir}"
 
     info "generating install list"
-    # generate the list of all packages
-    local packages_all="$(mktemp -t packages_all.XXXXXX)"
-    packages2names "${workdir}/Packages" >"${packages_all}"
-    sort -uo "${packages_all}" "${packages_all}"
+    if false; then
+        # generate the list of all packages
+        local packages_all="$(mktemp -t packages_all.XXXXXX)"
+        packages2names "${workdir}/Packages" >"${packages_all}"
+        sort -uo "${packages_all}" "${packages_all}"
 
-    # after (possibly) installing new dependencies, re-enumerate package edges
-    packages2edges "${workdir}/Packages" >"${package_edges}"
+        # after (possibly) installing new dependencies, re-enumerate package edges
+        packages2edges "${workdir}/Packages" >"${package_edges}"
 
-    # generate the list of "strongly connected component" packages
-    local packages_scc="$(mktemp -t packages_scc.XXXXXX)"
-    kosaraju_scc "${package_edges}" >"${packages_scc}"
-    sort -uo "${packages_scc}" "${packages_scc}"
+        # generate the list of "strongly connected component" packages
+        local packages_scc="$(mktemp -t packages_scc.XXXXXX)"
+        kosaraju_scc "${package_edges}" >"${packages_scc}"
+        sort -uo "${packages_scc}" "${packages_scc}"
 
-    # set-subtract from all packages the scc packages to give "weakly connected
-    # component" packages; i.e., the list of packages to install
-    comm -23 "${packages_all}" "${packages_scc}" >"${workdir}/install-list.txt"
+        # set-subtract from all packages the scc packages to give "weakly connected
+        # component" packages; i.e., the list of packages to install
+        comm -23 "${packages_all}" "${packages_scc}" >"${workdir}/install-list.txt"
+    else
+        find "${workdir}" -maxdepth 1 -type f -name '*.deb' \
+            -exec dpkg-deb --field {} 'Package' \; \
+            | sort -u >"${workdir}/install-list.txt"
+    fi
 
     #####################
     # LAWYER CHOW BEGIN #
