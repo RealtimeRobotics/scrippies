@@ -79,6 +79,7 @@ while [ 0 -lt "$#" ]; do
                 die "missing directory: $2"
             fi
             readonly catkin_ws="${catkin_ws}"
+            shift
             ;;
         -n|--dry-run)
 	        readonly dry_run="true"
