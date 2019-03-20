@@ -177,11 +177,9 @@ fi
 # assumes we want to replace every instance of the old_triplet with the
 # new_triplet; this is pretty aggressive and may collide with version strings
 # that we _don't_ want to change
-while read package_xml; do
-    sed -r ${sed_opts} \
+xargs sed -r ${sed_opts} \
         "s|${old_major}\.${old_minor}\.${old_patch}|${new_major}\.${new_minor}\.${new_patch}|g" \
-        "${package_xml}"
-done <"${package_xml_list}"
+        <"${package_xml_list}"
 
 if ! [ "true" = "${git_commit:-false}" ]; then
     exit "$?"
