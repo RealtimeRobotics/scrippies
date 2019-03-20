@@ -39,6 +39,8 @@ Options:
     --major         bump the version major number
     --minor         bump the version minor number
     --patch         bump the version patch number (this is the default)
+    --git-commit    git commit the result
+    --git-tag       git tag the result
 
 Examples:
 
@@ -92,6 +94,12 @@ while [ 0 -lt "$#" ]; do
             ;;
         --patch)
             readonly bump="patch"
+            ;;
+        --git-commit)
+            readonly git_commit="true"
+            ;;
+        --git-tag)
+            readonly git_tag="true"
             ;;
         *)
             die "bad option: $1"
@@ -174,5 +182,29 @@ while read package_xml; do
         "s|${old_major}\.${old_minor}\.${old_patch}|${new_major}\.${new_minor}\.${new_patch}|g" \
         "${package_xml}"
 done <"${package_xml_list}"
+
+if ! [ "true" = "${git_commit:-false}" ]; then
+    exit "$?"
+fi
+
+readonly new_triplet="${new_major}.${new_minor}.${new_patch}"
+export GIT_AUTHOR_DATE="$(date -uIs)"
+export GIT_COMMITTER_DATE="${GIT_AUTHOR_DATE}"
+if [ "true" = "${dry_run:-false}" ]; then
+    git -C "${catkin_ws}" commit --all --message="bump version ${new_triplet}" --dry-run || true
+else
+    git -C "${catkin_ws}" commit --all --message="bump version ${new_triplet}"
+fi
+
+if ! [ "true" = "${git_tag:-false}" ]; then
+    exit "$?"
+fi
+
+readonly cmd_git_tag="git -C \"${catkin_ws}\" tag --sign --message=\"tag version ${new_triplet}\" \"${new_triplet}\" HEAD"
+if [ "true" = "${dry_run:-false}" ]; then
+    info "dry-run: ${cmd_git_tag}"
+else
+    eval "${cmd_git_tag}"
+fi
 
 exit "$?"
