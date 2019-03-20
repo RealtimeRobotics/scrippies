@@ -39,8 +39,8 @@ Options:
     --major         bump the version major number
     --minor         bump the version minor number
     --patch         bump the version patch number (this is the default)
-    --git-commit    git commit the result
-    --git-tag       git tag the result
+    --git-commit    git commit the result of the version bump
+    --git-tag       git tag the result of the git commit
 
 Examples:
 
