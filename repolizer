@@ -452,6 +452,22 @@ run_raw() {
     comm -13 "${packages_top}" "${run_deps_recurse}" >"${workdir}/third-party-run-deps-recurse.txt"
     comm -13 "${packages_top}" "${build_deps_shallow}" >"${workdir}/third-party-build-deps-shallow.txt"
     comm -13 "${packages_top}" "${build_deps_recurse}" >"${workdir}/third-party-build-deps-recurse.txt"
+
+    # from depends debs, extract copyright files
+    info "collecting third-party copyrights"
+    local deb_list="$(mktemp -t deb_list.XXXXXX)"
+    find "${workdir}/depends" -type f -name '*.deb' >"${deb_list}"
+    mkdir -p "${workdir}/third-party-copyrights"
+    while read deb; do
+        local fsys_tarfile="$(mktemp -t "$(basename "${deb}" .deb).tar.XXXXXX")"
+        dpkg-deb --fsys-tarfile "${deb}" >"${fsys_tarfile}"
+        tar -tf "${fsys_tarfile}" \
+            | grep -E '^\./usr/share/doc/[^/]+/copyright$' \
+            | xargs -r tar \
+                    -C "${workdir}/third-party-copyrights" \
+                    --strip-components=4 \
+                    -xf "${fsys_tarfile}"
+    done <"${deb_list}"
     ###################
     # LAWYER CHOW END #
     ###################
