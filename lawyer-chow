@@ -158,27 +158,44 @@ readonly build_deps_recurse="$(mktemp -t build_deps_recurse.XXXXXX)"
 apt_cache_depends_recurse <"${build_deps_shallow}" \
     | ctrlval_clean >"${build_deps_recurse}"
 
+# from all debs, extract copyright files
+info "collecting copyrights"
+readonly deb_list="$(mktemp -t deb_list.XXXXXX)"
+find "${workdir}" -type f -name '*.deb' >"${deb_list}"
+readonly acc_copyrights="$(mktemp -t acc_copyrights.XXXXXX)"
+(
+    cd "$(mktemp -d)"
+    while read deb; do
+        fsys_tarfile="$(mktemp -t "$(basename "${deb}" .deb).tar.XXXXXX")"
+        dpkg-deb --fsys-tarfile "${deb}" >"${fsys_tarfile}"
+        tar -tf "${fsys_tarfile}" \
+            | grep -E '^\./usr/share/doc/[^/]+/copyright$' \
+            | xargs -r tar -xf "${fsys_tarfile}"
+    done <"${deb_list}"
+    readonly copyright_path_list="$(mktemp -t copyright_path_list.XXXXXX)"
+    find "${PWD}" -type f -name 'copyright' >"${copyright_path_list}"
+    sort -uo "${copyright_path_list}" "${copyright_path_list}"
+    while read copyright_path; do
+        name="# $(basename "$(dirname "${copyright_path}")") #"
+        edge="$(echo "${name}" | sed 's/./#/g')"
+        echo
+        echo "${edge}"
+        echo "${name}"
+        echo "${edge}"
+        cat "${copyright_path}"
+    done <"${copyright_path_list}" >"${acc_copyrights}"
+)
+
 (
     cd "$(mktemp -dt)"
+    cp "${acc_copyrights}" copyrights.txt
 
     info "generating third-party dependency lists"
     comm -13 "${packages_top}" "${run_deps_shallow}" >third-party-run-deps-shallow.txt
     comm -13 "${packages_top}" "${run_deps_recurse}" >third-party-run-deps-recurse.txt
     comm -13 "${packages_top}" "${build_deps_shallow}" >third-party-build-deps-shallow.txt
     comm -13 "${packages_top}" "${build_deps_recurse}" >third-party-build-deps-recurse.txt
-
-    # from all debs, extract copyright files
-    info "collecting copyrights"
-    readonly deb_list="$(mktemp -t deb_list.XXXXXX)"
-    find "${workdir}" -type f -name '*.deb' >"${deb_list}"
-    while read deb; do
-        fsys_tarfile="$(mktemp -t "$(basename "${deb}" .deb).tar.XXXXXX")"
-        dpkg-deb --fsys-tarfile "${deb}" >"${fsys_tarfile}"
-        tar -tf "${fsys_tarfile}" \
-            | grep -E '^\./usr/share/doc/[^/]+/copyright$' \
-            | xargs -r tar --strip-components=4 -xf "${fsys_tarfile}"
-    done <"${deb_list}"
-
+    
     readonly tmptar="$(mktemp -ut tmptar.XXXXXX)"
     # making a deterministic tar is hard
     find . ! -type d \
