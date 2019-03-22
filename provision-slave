@@ -6,7 +6,7 @@ set -euvx
 
 readonly this="$(readlink -f "$0")"
 readonly here="$(dirname "${this}")"
-readonly whatami="$(basename "${here}").$(basename "${this}")"
+readonly whatami="$(basename "${this}")"
 readonly tmpdir="$(mktemp -dt "${whatami}.XXXXXX")"
 
 log() { echo "${whatami}[$$]: $@" >&2; }
@@ -52,6 +52,9 @@ EOF
 trap cleanup EXIT
 export TMPDIR="${tmpdir}"
 export LC_ALL=C
+export TZ=UTC
+
+timedatectl set-timezone UTC
 
 ########################
 # INSTALL DOCKER BEGIN #
