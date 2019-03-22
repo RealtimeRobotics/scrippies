@@ -1,0 +1,198 @@
+#!/bin/sh
+
+# scrippies/lawyer-chow
+
+set -eu
+
+readonly this="$(readlink -f "$0")"
+readonly here="$(dirname "${this}")"
+readonly whatami="$(basename "${this}")"
+readonly tmpdir="$(mktemp -dt "${whatami}.XXXXXX")"
+readonly default_outfile="lawyer-chow.tar.xz"
+
+log() { echo "${whatami}[$$]: $@" >&2; }
+error() { log "ERROR: $@"; }
+warning() { log "WARNING: $@"; }
+info() { log "INFO: $@"; }
+
+die() {
+    error "$@"
+    usage >&2
+    exit 1
+}
+
+cleanup() {
+    local status="$?"
+    rm -rf "${tmpdir}"
+    return "${status}"
+}
+
+usage() {
+    cat <<EOF
+Usage: $0 [OPTION]...
+Make lawyer chow from Debian packages in the current working directory.
+
+Options:
+    -h            print this usage and return success
+    -C WORKDIR    run as if started in WORKDIR (default: \$PWD)
+    -o OUTFILE    write to OUTFILE (default: ${default_outfile})
+
+Examples:
+
+    \$ $0
+
+    \$ $0 -C \$PWD
+
+    \$ $0 -C \$PWD -o ${default_outfile}
+
+EOF
+}
+
+# read package names from stdin, print recursive depends packages to stdout
+apt_cache_depends_recurse() {
+    xargs apt-cache depends \
+        --recurse \
+        --no-recommends \
+        --no-suggests \
+        --no-conflicts \
+        --no-breaks \
+        --no-replaces \
+        --no-enhances \
+        | sed -nr \
+            -e 's/^([[:alnum:]][[:alnum:].+-]+)$/\n\1/gp' \
+            -e 's/^ [ |](Pre)?Depends: ([[:alnum:]][[:alnum:].+-]+)$/\2/gp' \
+            -e 's/^    ([[:alnum:]][[:alnum:].+-]+)$/\1/gp'
+}
+
+ctrlval_clean() {
+    sed -r 's|,[[:space:]]+|\n|g' \
+        | sed -r 's|^([[:graph:]]+).*|\1|g' \
+        | sed -r '/^[[:space:]]*$/d' \
+        | sort -u
+}
+
+################################################################################
+
+trap cleanup EXIT
+export TMPDIR="${tmpdir}"
+export LC_ALL=C
+
+while getopts ":hC:o:" opt; do
+    case "${opt}" in
+        h)
+            usage
+            exit 0
+            ;;
+        r) readonly run_raw="true" ;;
+        C)
+            if ! workdir="$(readlink -f "${OPTARG}")"; then
+                die "bad path: ${OPTARG}"
+            fi
+            if ! [ -d "${workdir}" ]; then
+                die "bad directory: ${workdir}"
+            fi
+            readonly workdir="${workdir}"
+            ;;
+        o)
+            if ! outfile="$(readlink -f "${OPTARG}")"; then
+                die "bad path: ${OPTARG}"
+            fi
+            readonly outfile="${outfile}"
+            ;;
+        :) die "missing argument: -${OPTARG}" ;;
+        \?) die "bad option: -${OPTARG}" ;;
+    esac
+done
+shift "$((${OPTIND} - 1))"
+
+if [ -n "${workdir:-}" ]; then
+    info "workdir: ${workdir}"
+else
+    readonly workdir="${PWD}"
+    warning "defaulting workdir: ${workdir}"
+fi
+
+if [ -n "${outfile:-}" ]; then
+    info "outfile: ${outfile}"
+else
+    readonly outfile="$(readlink -f "${default_outfile}")"
+    warning "defaulting outfile: ${outfile}"
+fi
+
+if [ -f "${outfile}" ]; then
+    warning "extant outfile: ${outfile}"
+fi
+
+#####################
+# LAWYER CHOW BEGIN #
+#####################
+info "generating top package list"
+readonly packages_top="$(mktemp -t packages_top.XXXXXX)"
+find "${workdir}" -maxdepth 1 -type f -name '*.deb' \
+     -exec dpkg-deb --field {} 'Package' \; \
+    | sort -u >"${packages_top}"
+
+# from *.deb files to run_deps_shallow
+info "generating run-deps-shallow.txt"
+readonly run_deps_shallow="$(mktemp -t run_deps_shallow.XXXXXX)"
+find "${workdir}" -maxdepth 1 -type f -name '*.deb' \
+     -exec dpkg-deb --field {} 'Depends' \; \
+    | ctrlval_clean >"${run_deps_shallow}"
+
+# from run_deps_shallow to run_deps_recurse
+info "generating run-deps-recurse.txt"
+readonly run_deps_recurse="$(mktemp -t run_deps_recurse.XXXXXX)"
+apt_cache_depends_recurse <"${run_deps_shallow}" \
+    | ctrlval_clean >"${run_deps_recurse}"
+
+# from *.dsc files to build_deps_shallow
+info "generating build-deps-shallow.txt"
+readonly build_deps_shallow="$(mktemp -t build_deps_shallow.XXXXXX)"
+find "${workdir}" -maxdepth 1 -type f -name '*.dsc' \
+     -exec sed -nr 's|^Build-Depends: (.*)$|\1|gp' {} + \
+    | ctrlval_clean >"${build_deps_shallow}"
+
+# from build_deps_shallow to build_deps_recurse
+info "generating build deps recurse"
+readonly build_deps_recurse="$(mktemp -t build_deps_recurse.XXXXXX)"
+apt_cache_depends_recurse <"${build_deps_shallow}" \
+    | ctrlval_clean >"${build_deps_recurse}"
+
+(
+    cd "$(mktemp -dt)"
+
+    info "generating third-party dependency lists"
+    comm -13 "${packages_top}" "${run_deps_shallow}" >third-party-run-deps-shallow.txt
+    comm -13 "${packages_top}" "${run_deps_recurse}" >third-party-run-deps-recurse.txt
+    comm -13 "${packages_top}" "${build_deps_shallow}" >third-party-build-deps-shallow.txt
+    comm -13 "${packages_top}" "${build_deps_recurse}" >third-party-build-deps-recurse.txt
+
+    # from all debs, extract copyright files
+    info "collecting copyrights"
+    readonly deb_list="$(mktemp -t deb_list.XXXXXX)"
+    find "${workdir}" -type f -name '*.deb' >"${deb_list}"
+    while read deb; do
+        fsys_tarfile="$(mktemp -t "$(basename "${deb}" .deb).tar.XXXXXX")"
+        dpkg-deb --fsys-tarfile "${deb}" >"${fsys_tarfile}"
+        tar -tf "${fsys_tarfile}" \
+            | grep -E '^\./usr/share/doc/[^/]+/copyright$' \
+            | xargs -r tar --strip-components=4 -xf "${fsys_tarfile}"
+    done <"${deb_list}"
+
+    readonly tmptar="$(mktemp -ut tmptar.XXXXXX)"
+    # making a deterministic tar is hard
+    find . ! -type d \
+        | sort \
+        | sed 's/./\\&/g' \
+        | xargs tar \
+            --numeric-owner \
+            --owner=0 \
+            --group=0 \
+            --format=pax \
+            --pax-option "exthdr.name=%d/PaxHeaders/%f,atime:=0,ctime:=0,mtime:=0" \
+            --mtime=@0 \
+            -rf "${tmptar}"
+    xz <"${tmptar}" >"${outfile}"
+)
+
+exit "$?"
