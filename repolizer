@@ -520,7 +520,7 @@ groupadd -g "${DOCKER_HOST_GID}" luser
 useradd \
     -u "${DOCKER_HOST_UID}" \
     -g "${DOCKER_HOST_GID}" \
-    -d "$(mktemp -dt home.luser.XXXXXX)" \
+    -d "$(mktemp -ut home_luser.XXXXXX)" \
     -s "$(command -v sh)" \
     luser
 
