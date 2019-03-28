@@ -9,8 +9,6 @@ readonly here="$(dirname "${this}")"
 readonly whatami="$(basename "${this}")"
 readonly tmpdir="$(mktemp -dt "${whatami}.XXXXXX")"
 
-readonly default_deb_cmd='find .'
-
 log() { echo "${whatami}[$$]: $@" >&2; }
 error() { log "ERROR: $@"; }
 warning() { log "WARNING: $@"; }
@@ -23,23 +21,22 @@ die() {
 }
 
 cleanup() {
-    status="$?"
-    rm -rf "${control_tar:-}" "${tmpdir}"
+    local status="$?"
+    rm -rf "${tmpdir}"
     return "${status}"
 }
 
 usage() {
     cat <<EOF
-Usage: $(basename ${this}) [OPTION]... DEB_FILE...
-Execute arbitrary commands on DEB_FILE contents.
+Usage: $0 [OPTION]... DEB_FILE...
+From the given Debian package(s), remove headers.
 
 Options:
-    -h        print usage and exit
-    -c DEB_CMD    invoke DEB_CMD on contents of DEB_FILE (default: ${default_deb_cmd})
+    -h    print usage and exit
 
 Examples:
 
-    \$ $(basename ${this}) -c ${default_deb_cmd} path/to/foobar.deb
+    \$ $0 path/to/foobar.deb
 
 EOF
 }
