@@ -61,7 +61,8 @@ Make current working directory an apt repository with resolved dependencies.
 
 Options:
     -h                 print this usage and return success
-    -C WORKDIR         run as if started in WORKDIR
+    -C WORKDIR         run as if started in WORKDIR (default: \$PWD)
+    -a APT_REPO_DIR    use APT_REPO_DIR
     -D DISTRIBUTION    override distribution (default: ${default_distribution})
 
 Examples:
@@ -70,7 +71,9 @@ Examples:
 
     \$ $(basename ${this}) -C \$PWD
 
-    \$ $(basename ${this}) -C \$PWD -D xenial
+    \$ $(basename ${this}) -C \$PWD -a path/to/apt-repo
+
+    \$ $(basename ${this}) -C \$PWD -a path/to/apt-repo -D xenial
 
 EOF
 }
@@ -316,7 +319,7 @@ EOF
 #
 # * create and/or update a fake apt repository within
 #
-# * install a (deterministically) generated apt sources list file
+# * install a generated (and deterministically named) apt sources list file
 #
 # * update the apt configuration
 #
@@ -355,6 +358,9 @@ run_raw() {
     # happens:
     #
     #     rm: cannot remove '/var/cache/apt/archives/partial/*.deb': Permission denied
+    info "repolizing ${apt_repo_dir}"
+    apt_repolize "${apt_repo_dir}"
+
     info "repolizing ${workdir}"
     apt_repolize "${workdir}"
 
@@ -388,6 +394,9 @@ run_raw() {
     )
     info "re-repolizing ${workdir}"
     apt_repolize "${workdir}"
+
+    info "done"
+    return "$?"
 
     info "generating install list"
     if false; then
@@ -423,6 +432,7 @@ run_dockerized() {
     fi
 
     docker container run \
+        --env APT_REPO_DIR="${apt_repo_dir}" \
         --env CONFIGURE_APT_OPTS="${CONFIGURE_APT_OPTS:-}" \
         --env DEBCONF_NONINTERACTIVE_SEEN=true \
         --env DEBIAN_FRONTEND=noninteractive \
@@ -435,6 +445,7 @@ run_dockerized() {
         --interactive \
         --mount type=bind,readonly,source="${here}/configure-apt",target="${here}/configure-apt" \
         --mount type=bind,readonly,source="${this}",target="${this}" \
+        --mount type=bind,source="${apt_repo_dir}",target="${apt_repo_dir}" \
         --mount type=bind,source="${workdir}",target="${workdir}" \
         --rm \
         --workdir "${workdir}" \
@@ -465,7 +476,7 @@ useradd \
     -s "$(command -v sh)" \
     luser
 
-nice -n19 su -c "${THIS} -r -C ${WORKDIR} -D ${DISTRIBUTION}" luser
+nice -n19 su -c "${THIS} -r -C ${WORKDIR} -a ${APT_REPO_DIR} -D ${DISTRIBUTION}" luser
 EOF
 }
 
@@ -475,7 +486,7 @@ trap cleanup EXIT
 export TMPDIR="${tmpdir}"
 export LC_ALL=C
 
-while getopts ":hrC:D:" opt; do
+while getopts ":hrC:a:D:" opt; do
     case "${opt}" in
         h)
             usage
@@ -491,6 +502,15 @@ while getopts ":hrC:D:" opt; do
             fi
             readonly workdir="${workdir}"
             ;;
+        a)
+            if ! apt_repo_dir="$(readlink -f "${OPTARG}")"; then
+                die "missing: ${OPTARG}"
+            fi
+            if ! [ -d "${apt_repo_dir}" ]; then
+                die "not a directory: ${apt_repo_dir}"
+            fi
+            readonly apt_repo_dir="${apt_repo_dir}"
+            ;;
         D) readonly distribution="${OPTARG}" ;;
         :) die "missing argument: -${OPTARG}" ;;
         \?) die "bad option: -${OPTARG}" ;;
@@ -498,18 +518,25 @@ while getopts ":hrC:D:" opt; do
 done
 shift "$((${OPTIND} - 1))"
 
-if [ -n "${distribution:-}" ]; then
-    info "distribution: ${distribution}"
-else
-    readonly distribution="${default_distribution}"
-    warning "defaulting distribution: ${distribution}"
-fi
-
 if [ -n "${workdir:-}" ]; then
     info "workdir: ${workdir}"
 else
     readonly workdir="${PWD}"
     warning "defaulting workdir: ${workdir}"
+fi
+
+if [ -n "${apt_repo_dir:-}" ]; then
+    info "apt_repo_dir: ${apt_repo_dir}"
+else
+    readonly apt_repo_dir="$(mktemp -dt fake_apt_repo_dir.XXXXXX)"
+    warning "defaulting apt_repo_dir: ${apt_repo_dir}"
+fi
+
+if [ -n "${distribution:-}" ]; then
+    info "distribution: ${distribution}"
+else
+    readonly distribution="${default_distribution}"
+    warning "defaulting distribution: ${distribution}"
 fi
 
 if [ "true" = "${run_raw:-false}" ]; then
