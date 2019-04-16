@@ -1,0 +1,187 @@
+#!/bin/sh
+
+set -eu
+
+readonly this="$(readlink -f "$0")"
+readonly whatami="$(basename "${this}")"
+readonly tmpdir="$(mktemp -dt "${whatami}.XXXXXX")"
+
+readonly default_limit="3"
+readonly default_remote="origin"
+
+log() { echo "${whatami}[$$]: $@" >&2; }
+error() { log "ERROR: $@"; }
+warning() { log "WARNING: $@"; }
+info() { log "INFO: $@"; }
+
+die() {
+    error "$@"
+    usage >&2
+    exit 1
+}
+
+cleanup() {
+    local status="$?"
+    rm -rf "${tmpdir}" || true
+    return "${status}"
+}
+
+usage() {
+    cat <<EOF
+Usage: $0 [OPTION]... [-- GIT_PUSH_OPTION...]
+Prune some git branches.
+
+Options:
+    -h,--help              print help and exit
+    -C WORKDIR             run as if started in WORKDIR (default: \$PWD)
+    -l,--limit LIMIT       override per-user limit (default: ${default_limit})
+    -n,--dry-run           don't actually do anything
+    -r,--remote REMOTE     override remote name (default: ${default_remote})
+    -v,--verbose           run verbosely
+
+Examples:
+
+    \$ $0 -C path/to/checkout
+
+    \$ $0 -l 42
+
+    \$ $0 -n -v -l 2
+
+    \$ $0 -r RealtimeRobotics
+
+EOF
+}
+
+################################################################################
+
+trap cleanup EXIT
+export TMPDIR="${tmpdir}"
+export LC_ALL=C
+
+while [ 0 -lt "$#" ]; do
+    case "$1" in
+        -h | --help)
+            usage
+            exit "$?"
+            ;;
+        -C)
+            if ! [ -n "${2:-}" ]; then
+                die "missing argument: $1"
+            fi
+            workdir="$(readlink -f "$2")"
+            if ! [ -n "${workdir}" ]; then
+                die "missing path: $2"
+            fi
+            if ! [ -d "${workdir}" ]; then
+                die "missing directory: $2"
+            fi
+            readonly workdir="${workdir}"
+            shift
+            ;;
+        -l | --limit)
+            if ! [ -n "${2:-}" ]; then
+                die "missing argument: $1"
+            fi
+            if ! [ "$2" -eq "$2" ]; then
+                die "not a number: $2"
+            fi
+            readonly limit="$2"
+            shift
+            ;;
+        -n | --dry-run)
+            readonly opt_dry_run="--dry-run"
+            ;;
+        -r | --remote)
+            if ! [ -n "${2:-}" ]; then
+                die "missing argument: $1"
+            fi
+            readonly remote="$2"
+            shift
+            ;;
+        -v | --verbose)
+            readonly opt_verbose="--verbose"
+            ;;
+        *)
+            die "bad option: $1"
+            ;;
+    esac
+    shift
+done
+
+if ! [ 0 -eq "$#" ]; then
+    die "bad args"
+fi
+
+# begin vet opts
+
+if [ -n "${workdir:-}" ]; then
+    info "workdir: ${workdir}"
+else
+    readonly workdir="${PWD}"
+    warning "defaulting workdir: ${workdir}"
+fi
+
+if [ -n "${limit:-}" ]; then
+    info "limit: ${limit}"
+else
+    readonly limit="${default_limit}"
+    warning "defaulting limit: ${limit}"
+fi
+
+if [ -n "${remote:-}" ]; then
+    info "remote: ${remote}"
+else
+    readonly remote="${default_remote}"
+    warning "defaulting remote: ${remote}"
+fi
+
+# begin real work
+
+# git -C "${workdir}" fetch ${opt_dry_run:-} ${opt_verbose:-} --all
+
+readonly ref_list="$(mktemp -t ref_list.XXXXXX)"
+git -C "${workdir}" \
+    for-each-ref \
+    --format='%(authoremail)%09%(committerdate:iso-local)%09%(refname)' \
+    >"${ref_list}"
+sed -nri "/refs\/remotes\/${remote}\/[[:graph:]]+/p" "${ref_list}"
+sed -ri "/(HEAD|master|stable|release-[[:alnum:].]+)$/d" "${ref_list}"
+sort -uo "${ref_list}" "${ref_list}"
+
+if false; then
+    readonly rank_list="$(mktemp -t rank_list.XXXXXX)"
+    cut -f1 <"${ref_list}" \
+        | sort \
+        | uniq -c \
+        | sort -nr >"${rank_list}"
+    cat "${rank_list}"
+fi
+
+readonly author_list="$(mktemp -t author_list.XXXXXX)"
+cut -f1 <"${ref_list}" >"${author_list}"
+sort -uo "${author_list}" "${author_list}"
+
+readonly delete_ref_list="$(mktemp -t delete_ref_list.XXXXXX)"
+while read author; do
+    author_ref_list="$(mktemp -t "${author}.ref_list.XXXXXX")"
+    grep -E "^${author}$(printf '\t')" <"${ref_list}" >"${author_ref_list}"
+    sort -ruo "${author_ref_list}" "${author_ref_list}"
+    sed -i "1,${limit}d" "${author_ref_list}"
+    cat <"${author_ref_list}" >>"${delete_ref_list}"
+done <"${author_list}"
+
+if [ -n "${opt_verbose:-}" ]; then
+    info "will delete:"
+    while read line; do info "  ${line}"; done <"${delete_ref_list}"
+fi
+
+readonly delete_branch_list="$(mktemp -t delete_branch_list.XXXXXX)"
+cut -f3 <"${delete_ref_list}" >"${delete_branch_list}"
+sed -i "s|^refs/remotes/${remote}/||" "${delete_branch_list}"
+
+xargs -r \
+    git -C "${workdir}" \
+    push ${opt_dry_run:-} ${opt_verbose:-} --delete "${remote}" \
+    <"${delete_branch_list}"
+
+exit "$?"
