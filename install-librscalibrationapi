@@ -1,5 +1,7 @@
 #!/bin/sh
 
+# scrippies/install-librscalibrationapi
+
 set -euvx
 
 readonly this="$(readlink -f "$0")"
@@ -98,6 +100,7 @@ fi
     find "${deb_dir}" -type d -empty -delete
     dpkg-deb --build "${deb_dir}" "${deb_file}"
     rm -rf "${deb_dir}"
+    dpkg-scanpackages --multiversion . >Packages
 )
 
 exit "$?"
