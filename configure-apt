@@ -28,7 +28,7 @@ cleanup() {
 
 usage() {
     cat <<EOF
-Usage: $(basename ${this}) [OPTION]... [DISTRIBUTION]
+Usage: $0 [OPTION]... [DISTRIBUTION]
 Configure apt to use additional repositories.
 
 Notes:
@@ -46,26 +46,26 @@ Options:
 Examples:
 
     # discover distribution, install everything:
-    \$ $(basename ${this})
-    \$ $(basename ${this}) -A
+    \$ $0
+    \$ $0 -A
 
     # discover distribution, install public keys only
-    \$ $(basename ${this}) -K
+    \$ $0 -K
 
     # discover distribution, install apt sources list files only
-    \$ $(basename ${this}) -L
+    \$ $0 -L
 
     # discover distribution, install everything, use intranet mirrors
-    \$ $(basename ${this}) -I
-    \$ $(basename ${this}) -IX
-    \$ $(basename ${this}) -AI
-    \$ $(basename ${this}) -AIX
+    \$ $0 -I
+    \$ $0 -IX
+    \$ $0 -AI
+    \$ $0 -AIX
 
-    \$ $(basename ${this}) trusty
+    \$ $0 trusty
 
-    \$ $(basename ${this}) xenial
+    \$ $0 xenial
 
-    \$ $(basename ${this}) bionic
+    \$ $0 bionic
 
 EOF
 }
@@ -82,16 +82,51 @@ etc_apt_sources_list_d() {
     apt-config shell _ Dir _ Dir::Etc _ Dir::Etc::sourceparts | apt_config_path
 }
 
+# read stdin (assumed to be apt sources list file body) into the given apt
+# sources list file
+#
+# $1 : listfile to be written
+read_into_listfile() {
+    info "installing: $1"
+    if [ -f "$1" ]; then
+        warning "file exists: $1"
+        warning "$(mv -v $1 $1.backup)"
+    fi
+    cat >"$1" <<EOF
+# $1
+#
+# This is a generated apt sources list file.
+#
+# https://wiki.debian.org/SourcesList
+#
+# generator : ${this}
+# user      : $(id)
+# uname     : $(uname -a)
+# date      : $(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
+EOF
+    cat >>"$1"
+}
+
+# 3.282 Portable Filename Character Set
+# https://pubs.opengroup.org/onlinepubs/9699919799/basedefs/V1_chap03.html#tag_03_282
+filenamify() {
+    printf "$@" | tr -sc '[:alnum:]._-' '_'
+}
+
+# read stdin (assumed to be apt sources list file body) into a generated apt
+# sources list file named for the given url
+#
+# $1 : url from which to generate apt sources list file name
+read_into_generated() {
+    read_into_listfile "$(etc_apt_sources_list_d)/$(filenamify "$1").list"
+}
+
 ################################################################################
 
 trap cleanup EXIT
 export TMPDIR="${tmpdir}"
 export LC_ALL=C
-
-if ! [ 0 -eq "$(id -u)" ]; then
-    sudo "${this}" $@
-    exit "$?"
-fi
 
 while getopts ":hAKLIXZ" opt; do
     case "${opt}" in
@@ -299,50 +334,39 @@ mhqidES4MwCggqQyo+w1Twx6DKLF+3rF5nf1F3Q=
 EOF
 fi
 
-# read stdin (assumed to be apt sources list file body) into the given file
-#
-# $1 : listfile to be written
-read_into_listfile() {
-    info "installing: $1"
-    if [ -f "$1" ]; then
-        warning "file exists: $1"
-        warning "$(mv -v $1 $1.backup)"
-    fi
-    cat >"$1" <<EOF
-# $1
-#
-# THIS IS A GENERATED FILE
-# whoami    : $(whoami)
-# hostname  : $(hostname)
-# date      : $(date -uIs)
-# generator : $(basename "${this}")
-
-EOF
-    cat >>"$1"
-}
-
 if [ "true" = "${install_lists:-false}" ]; then
+    # rando filesystem-resident apt repositories; I need some convention for
+    # where to put such things, so here's this:
+    find "/var/packages" -type f -name 'Packages' -exec dirname {} + \
+        | sort -u \
+        | while read repodir; do
+        (
+            cd "${repodir}"
+            read_into_generated "file://${PWD}" <<EOF
+deb     [trusted=yes] file://${PWD} ./
+EOF
+        )
+    done
+
     # realsense
     if [ "true" = "${use_intranet:-false}" ]; then
         readonly realsense_url="http://10.164.5.14/apt/realsense/${distribution}"
-        warning "realsense_url: ${realsense_url}"
     else
         readonly realsense_url="http://realsense-hw-public.s3.amazonaws.com/Debian/apt-repo"
-        info "realsense_url: ${realsense_url}"
     fi
-    read_into_listfile "$(etc_apt_sources_list_d)/realsense.list" <<EOF
+    info "realsense_url: ${realsense_url}"
+    read_into_generated "${realsense_url}" <<EOF
 deb     ${realsense_url} ${distribution} main
 EOF
 
     # ros
     if [ "true" = "${use_intranet:-false}" ]; then
         readonly ros_url="http://10.164.5.14/apt/ros/${distribution}"
-        warning "ros_url: ${ros_url}"
     else
         readonly ros_url="http://packages.ros.org/ros/ubuntu"
-        info "ros_url: ${ros_url}"
     fi
-    read_into_listfile "$(etc_apt_sources_list_d)/ros.list" <<EOF
+    info "ros_url: ${ros_url}"
+    read_into_generated "${ros_url}" <<EOF
 deb     ${ros_url} ${distribution} main
 deb-src ${ros_url} ${distribution} main
 EOF
@@ -350,18 +374,17 @@ EOF
     # ubuntu
     if [ "true" = "${use_intranet:-false}" ]; then
         readonly ubuntu_url="http://10.164.5.14/apt/ubuntu/${distribution}"
-        warning "ubuntu_url: ${ubuntu_url}"
     else
         readonly ubuntu_url="http://archive.ubuntu.com/ubuntu"
-        info "ubuntu_url: ${ubuntu_url}"
     fi
+    info "ubuntu_url: ${ubuntu_url}"
 
     # /etc/apt/sources.list XOR /etc/apt/sources.list.d/ubuntu.list
     if [ -f "$(etc_apt_sources_list)" ]; then
         warning "file exists: $(etc_apt_sources_list)"
-        warning "skipping install: $(etc_apt_sources_list_d)/ubuntu.list"
+        warning "skipping install: ${ubuntu_url}"
     else
-        read_into_listfile "$(etc_apt_sources_list_d)/ubuntu.list" <<EOF
+        read_into_generated "${ubuntu_url}" <<EOF
 deb     ${ubuntu_url} ${distribution} main restricted universe multiverse
 deb     ${ubuntu_url} ${distribution}-backports main restricted universe multiverse
 deb     ${ubuntu_url} ${distribution}-security main restricted universe multiverse
