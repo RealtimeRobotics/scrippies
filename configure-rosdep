@@ -41,6 +41,12 @@ Examples:
 EOF
 }
 
+# 3.282 Portable Filename Character Set
+# https://pubs.opengroup.org/onlinepubs/9699919799/basedefs/V1_chap03.html#tag_03_282
+filenamify() {
+    printf "$@" | tr -sc '[:alnum:]._-' '_'
+}
+
 ################################################################################
 
 trap cleanup EXIT
@@ -96,7 +102,7 @@ fi
 # fi
 
 readonly packages_url="$1"
-readonly packages="${tmpdir}/$(echo "${packages_url}" | tr -s '/' '_')"
+readonly packages="${tmpdir}/$(filenamify "${packages_url}")"
 readonly pkgname_list="${packages}.list"
 curl -fsSLo "${packages}" "${packages_url}"
 sed -nr 's|^Package:[[:space:]]+([[:graph:]]+).*$|\1|gp' <"${packages}" >"${pkgname_list}"
