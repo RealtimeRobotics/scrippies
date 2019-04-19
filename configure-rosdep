@@ -6,7 +6,7 @@ set -eu
 
 readonly this="$(readlink -f "$0")"
 readonly here="$(dirname "${this}")"
-readonly whatami="$(basename "${here}").$(basename "${this}")"
+readonly whatami="$(basename "${this}")"
 readonly tmpdir="$(mktemp -dt "${whatami}.XXXXXX")"
 
 log() { echo "${whatami}[$$]: $@" >&2; }
@@ -28,7 +28,7 @@ cleanup() {
 
 usage() {
     cat <<EOF
-Usage: $(basename ${this}) [OPTION]... PACKAGES_URL
+Usage: $0 [OPTION]... PACKAGES_URL
 Trick rosdep into using additional apt packages.
 
 Options:
@@ -37,7 +37,7 @@ Options:
 
 Examples:
 
-    \$ $(basename ${this})
+    \$ $0
 EOF
 }
 
