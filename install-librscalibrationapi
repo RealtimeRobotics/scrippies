@@ -87,6 +87,7 @@ else
 fi
 
 (
+    mkdir -p "${pkg_dir}"
     cd "${pkg_dir}"
     curl -fsSLO "${deb_url}"
     deb_file="${PWD}/$(basename "${deb_url}")"
