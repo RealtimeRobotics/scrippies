@@ -1,6 +1,6 @@
 #!/bin/sh
 
-# scrippies/install-librscalibrationapi
+# scrippies/inject-librscalibrationapi
 
 set -euvx
 
