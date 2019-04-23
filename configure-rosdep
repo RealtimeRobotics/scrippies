@@ -127,11 +127,35 @@ cat >"${rosdep_yaml}" <<EOF
 
 EOF
 
+# bloom v0.8.0 started vetting package names for every supported OS; we need to
+# tell bigger lies
+#
+# * https://github.com/ros-infrastructure/bloom/releases/tag/0.8.0
+# * https://github.com/ros-infrastructure/bloom/commit/c247a1320172867ce87c94939df1f166d25a0bb0#diff-de0a9b67ffe2874a076b5fdb15bad484
+# * https://docs.ros.org/independent/api/rosdep/html/rosdep_yaml_format.html#os-name-identifiers-and-supported-package-managers
+readonly osname_list="$(mktemp -t osname_list.XXXXXX)"
+cat >"${osname_list}" <<EOF
+arch
+cygwin
+debian
+fedora
+freebsd
+gentoo
+opensuse
+osx
+rhel
+ubuntu
+EOF
+
 while read pkgname; do
     cat >>"${rosdep_yaml}" <<EOF
 ${pkgname}:
-  ubuntu: [${pkgname}]
 EOF
+    while read osname; do
+        cat >>"${rosdep_yaml}" <<EOF
+  ${osname}: [${pkgname}]
+EOF
+    done <"${osname_list}"
 done <"${pkgname_list}"
 
 # Generate a "rosdep sources list" file that references the freshly-generated
