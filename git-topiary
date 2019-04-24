@@ -28,14 +28,14 @@ cleanup() {
 
 usage() {
     cat <<EOF
-Usage: $0 [OPTION]... [-- GIT_PUSH_OPTION...]
+Usage: $0 [OPTION]...
 Prune some git branches.
 
 Options:
     -h,--help              print help and exit
     -C WORKDIR             run as if started in WORKDIR (default: \$PWD)
+    -D,--delete            actually push the deletion
     -l,--limit LIMIT       override per-user limit (default: ${default_limit})
-    -n,--dry-run           don't actually do anything
     -r,--remote REMOTE     override remote name (default: ${default_remote})
     -v,--verbose           run verbosely
 
@@ -45,7 +45,7 @@ Examples:
 
     \$ $0 -l 42
 
-    \$ $0 -n -v -l 2
+    \$ $0 -D -v -l 2
 
     \$ $0 -r RealtimeRobotics
 
@@ -88,8 +88,8 @@ while [ 0 -lt "$#" ]; do
             readonly limit="$2"
             shift
             ;;
-        -n | --dry-run)
-            readonly opt_dry_run="--dry-run"
+        -D | --delete)
+            readonly is_delete="true"
             ;;
         -r | --remote)
             if ! [ -n "${2:-}" ]; then
@@ -170,8 +170,17 @@ while read author; do
     cat <"${author_ref_list}" >>"${delete_ref_list}"
 done <"${author_list}"
 
+if ! [ -s "${delete_ref_list}" ]; then
+    info "nothing to delete"
+    exit "$?"
+fi
+
 if [ -n "${opt_verbose:-}" ]; then
-    info "will delete:"
+    if [ "true" = "${is_delete:-false}" ]; then
+        warning "WILL delete:"
+    else
+        info "WOULD delete:"
+    fi
     while read line; do info "  ${line}"; done <"${delete_ref_list}"
 fi
 
@@ -179,9 +188,12 @@ readonly delete_branch_list="$(mktemp -t delete_branch_list.XXXXXX)"
 cut -f3 <"${delete_ref_list}" >"${delete_branch_list}"
 sed -i "s|^refs/remotes/${remote}/||" "${delete_branch_list}"
 
-xargs -r \
-    git -C "${workdir}" \
-    push ${opt_dry_run:-} ${opt_verbose:-} --delete "${remote}" \
-    <"${delete_branch_list}"
+if [ "true" = "${is_delete:-false}" ]; then
+    warning "beginning wet run..."
+    xargs echo git -C "${workdir}" push --verbose --delete "${remote}" <"${delete_branch_list}"
+else
+    info "beginning dry run..."
+    xargs echo git -C "${workdir}" push --dry-run --verbose --delete "${remote}" <"${delete_branch_list}"
+fi
 
 exit "$?"
