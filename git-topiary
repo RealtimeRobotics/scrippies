@@ -190,10 +190,10 @@ sed -i "s|^refs/remotes/${remote}/||" "${delete_branch_list}"
 
 if [ "true" = "${is_delete:-false}" ]; then
     warning "beginning wet run..."
-    xargs echo git -C "${workdir}" push --verbose --delete "${remote}" <"${delete_branch_list}"
+    xargs git -C "${workdir}" push --verbose --delete "${remote}" <"${delete_branch_list}"
 else
     info "beginning dry run..."
-    xargs echo git -C "${workdir}" push --dry-run --verbose --delete "${remote}" <"${delete_branch_list}"
+    xargs git -C "${workdir}" push --dry-run --verbose --delete "${remote}" <"${delete_branch_list}"
 fi
 
 exit "$?"
