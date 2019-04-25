@@ -457,13 +457,18 @@ set -euvx
 # * https://askubuntu.com/questions/679233/failed-to-fetch-hash-sum-mismatch-tried-rm-apt-list-but-didnt-work
 # * https://serverfault.com/questions/722893/debian-mirror-hash-sum-mismatch
 # * https://gist.github.com/trastle/5722089
-find /var/lib/apt/lists -type f -print -delete
 cat >/etc/apt/apt.conf.d/99fixbadproxy <<FIXBADPROXY
 Acquire::http::Pipeline-Depth "0";
 Acquire::http::No-Cache=True;
 Acquire::BrokenProxy=true;
 FIXBADPROXY
 
+if ! command -v gpg >/dev/null 2>&1; then
+    apt-get -y update
+    apt-get -y --no-install-recommends install gnupg
+fi
+
+find /var/lib/apt/lists -type f -print -delete
 ${HERE}/configure-apt ${CONFIGURE_APT_OPTS} ${DISTRIBUTION}
 apt-get -y update
 apt-get -y --no-install-recommends install dpkg-dev
