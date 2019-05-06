@@ -33,11 +33,14 @@ Trick rosdep into using additional apt packages.
 
 Options:
 
-    -h                 print usage and exit
+    -h    print usage and exit
 
 Examples:
 
-    \$ $0
+    \$ $0 http://realsense-hw-public.s3.amazonaws.com/Debian/apt-repo/dists/$(lsb_release -sc)/main/binary-amd64/Packages
+
+    \$ $0 file:///var/lib/apt/lists/realsense-hw-public.s3.amazonaws.com_Debian_apt-repo_dists_bionic_main_binary-amd64_Packages.lz4
+
 EOF
 }
 
@@ -105,7 +108,36 @@ readonly packages_url="$1"
 readonly packages="${tmpdir}/$(filenamify "${packages_url}")"
 readonly pkgname_list="${packages}.list"
 curl -fsSLo "${packages}" "${packages_url}"
-sed -nr 's|^Package:[[:space:]]+([[:graph:]]+).*$|\1|gp' <"${packages}" >"${pkgname_list}"
+
+# > Unless a compression is indicated by the filename of the indices below, and
+# > (sic) index may be compressed in one or multiple of the following formats:
+# >
+# > * No compression (no extension)
+# > * XZ (.xz extension)
+# > * Gzip (.gz extension, usually for Contents files, and diffs)
+# > * Bzip2 (.bz2 extension, usually for Translations)
+# > * Gzip (.gz extension)
+# > * LZMA (.lzma extension)
+#
+# -- https://wiki.debian.org/DebianRepository/Format#Compression_of_indices
+case "${packages}" in
+    *Packages) decompress="cat" ;;
+    *Packages.bz2) decompress="bzip2 -cd" ;;
+    *Packages.gz) decompress="gzip -cd" ;;
+    # > I'd like us to try out using LZ4 compressed index files in
+    # > /var/lib/apt/lists for 18.04, starting from the beginning of the
+    # > development period with apt 1.6~alpha1 (ASAP).
+    #
+    # -- https://lists.ubuntu.com/archives/ubuntu-devel/2017-September/039972.html
+    # -- https://www.omgubuntu.co.uk/2017/09/ubuntu-devs-look-at-making-apt-index-files-smaller
+    *Packages.lz4) decompress="lz4 -cd" ;;
+    *Packages.lzma) decompress="lzma -cd" ;;
+    *Packages.xz) decompress="xz -cd" ;;
+    *) die "unrecognized Packages index file: ${packages}" ;;
+esac
+
+eval "${decompress}" <"${packages}" \
+     | sed -nr 's|^Package:[[:space:]]+([[:graph:]]+).*$|\1|gp' >"${pkgname_list}"
 sort -uo "${pkgname_list}" "${pkgname_list}"
 
 # Generate a "rosdep yaml" file that declares an eponymous ROS package package
