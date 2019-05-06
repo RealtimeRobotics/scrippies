@@ -47,18 +47,20 @@ Examples:
 EOF
 }
 
+get_home() {
+    getent passwd "$1" | cut -d: -f6
+}
+
+get_shell() {
+    getent passwd "$1" | cut -d: -f7
+}
+
 ################################################################################
 
 trap cleanup EXIT
 export TMPDIR="${tmpdir}"
 export LC_ALL=C
 export TZ=UTC
-
-timedatectl set-timezone UTC
-
-########################
-# INSTALL DOCKER BEGIN #
-########################
 
 # Install packages to allow apt to use a repository over HTTPS:
 find /var/lib/apt/lists -mindepth 1 -delete
@@ -69,7 +71,18 @@ apt-get -y install --no-install-recommends \
      default-jre-headless \
      lsb-release \
      nfs-common \
-     software-properties-common
+     ntp \
+     software-properties-common \
+     && true
+
+timedatectl set-timezone UTC
+
+systemctl enable ntp
+systemctl start ntp
+
+########################
+# INSTALL DOCKER BEGIN #
+########################
 
 readonly docker_gpg="$(mktemp -t docker.gpg.XXXXXX)"
 readonly docker_list="$(mktemp -t docker.list.XXXXXX)"
@@ -114,17 +127,35 @@ git lfs install --system
 # JENKINS AGENT BEGIN #
 #######################
 
+readonly jenkins_home="/var/jenkins"
+readonly jenkins_shell="$(command -v sh)"
+readonly jenkins_auth_keys="${jenkins_home}/.ssh/authorized_keys"
+
 if ! id -u jenkins; then
     useradd \
         --create-home \
         --groups docker \
-        --home-dir /var/jenkins \
-        --shell /bin/sh \
+        --home-dir "${jenkins_home}" \
+        --shell "${jenkins_shell}" \
         --system \
         jenkins
 fi
 
-readonly jenkins_auth_keys="/var/jenkins/.ssh/authorized_keys"
+if ! [ "$(get_home jenkins)" = "${jenkins_home}" ]; then
+    warning "changing jenkins home: $(get_home jenkins) -> ${jenkins_home}"
+    usermod -m -d "${jenkins_home}" jenkins
+fi
+
+if ! [ "$(get_shell jenkins)" = "${jenkins_shell}" ]; then
+    warning "changing jenkins shell: $(get_shell jenkins) -> ${jenkins_shell}"
+    usermod -s "${jenkins_shell}" jenkins
+fi
+
+if ! groups jenkins | grep -q '\bdocker\b'; then
+    warning "changing jenkins groups: $(groups jenkins) -> $(echo "$(groups jenkins)" docker)"
+    usermod -a -G docker jenkins
+fi
+
 mkdir -vp "$(dirname "${jenkins_auth_keys}")"
 cat >"${jenkins_auth_keys}" <<EOF
 ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQC80KltG71YkbzdfNRDDBTjdm0le5LZB2tYUTbXtrQcu03MdddCGBkrB8YOcnf9WJvdxqWb2y83buDRAw3rZvRLV76ht2VFnJ85ZFbYo6CoYW7Tywlx6sTKO/Ch9CDzkpExuuiJTX5NDBOmw+APCayyRxN7YQha6zudEWApp5J4P2WoA6gXjbIErkMDBGtYL0XahLEQyQczqm0WznqA9HS2uoXw/ayNhWJZixJqjTNDj2GEDkb3yuZRVVhGagbHc/U2DOwLEBcag6ykTXvLy4z6WnRgCHGeet9iV2zlzDDYbiEWe8vcLd4PABK46+XYfFmFht2b/2tzOb9CtePX6jQt /srv/jenkins/jenkins-slave-agent-key
