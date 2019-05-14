@@ -2,7 +2,7 @@
 
 # scrippies/push-all
 
-set -euvx
+set -eu
 
 readonly this="$(readlink -f "$0")"
 readonly here="$(dirname "${this}")"
