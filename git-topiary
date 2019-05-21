@@ -7,7 +7,6 @@ readonly whatami="$(basename "${this}")"
 readonly tmpdir="$(mktemp -dt "${whatami}.XXXXXX")"
 
 readonly default_limit="3"
-readonly default_remote="origin"
 
 log() { echo "${whatami}[$$]: $@" >&2; }
 error() { log "ERROR: $@"; }
@@ -36,7 +35,7 @@ Options:
     -C WORKDIR             run as if started in WORKDIR (default: \$PWD)
     -D,--delete            actually push the deletion
     -l,--limit LIMIT       override per-user limit (default: ${default_limit})
-    -r,--remote REMOTE     override remote name (default: ${default_remote})
+    -r,--remote REMOTE     override remote name (default: inferred from WORKDIR)
     -v,--verbose           run verbosely
 
 Examples:
@@ -50,6 +49,11 @@ Examples:
     \$ $0 -r RealtimeRobotics
 
 EOF
+}
+
+infer_remote() {
+    git -C "$1" rev-parse --abbrev-ref --symbolic-full-name @{u} \
+        | grep -Eo '^[^/]+'
 }
 
 ################################################################################
@@ -131,11 +135,17 @@ fi
 if [ -n "${remote:-}" ]; then
     info "remote: ${remote}"
 else
-    readonly remote="${default_remote}"
-    warning "defaulting remote: ${remote}"
+    if ! remote="$(infer_remote "${workdir}")"; then
+        die "FAILURE: infer_remote ${workdir}"
+    fi
+    if ! [ -n "${remote}" ]; then
+        die "FAILURE: infer_remote ${workdir}"
+    fi
+    readonly remote="${remote}"
+    warning "inferred remote: ${remote}"
 fi
 
-# begin real work
+################################################################################
 
 # git -C "${workdir}" fetch ${opt_dry_run:-} ${opt_verbose:-} --all
 
@@ -148,27 +158,33 @@ sed -nri "/refs\/remotes\/${remote}\/[[:graph:]]+/p" "${ref_list}"
 sed -ri "/(HEAD|master|stable|release-[[:alnum:].]+)$/d" "${ref_list}"
 sort -uo "${ref_list}" "${ref_list}"
 
-if false; then
+# cat "${ref_list}" >&2
+
+if [ -n "${opt_verbose:-}" ]; then
     readonly rank_list="$(mktemp -t rank_list.XXXXXX)"
     cut -f1 <"${ref_list}" \
         | sort \
         | uniq -c \
         | sort -nr >"${rank_list}"
-    cat "${rank_list}"
+    cat "${rank_list}" >&2
 fi
 
 readonly author_list="$(mktemp -t author_list.XXXXXX)"
 cut -f1 <"${ref_list}" >"${author_list}"
 sort -uo "${author_list}" "${author_list}"
 
+# cat "${author_list}" >&2
+
 readonly delete_ref_list="$(mktemp -t delete_ref_list.XXXXXX)"
 while read author; do
     author_ref_list="$(mktemp -t "${author}.ref_list.XXXXXX")"
-    grep -E "^${author}$(printf '\t')" <"${ref_list}" >"${author_ref_list}"
+    grep "^${author}$(printf '\t')" <"${ref_list}" >"${author_ref_list}"
     sort -ruo "${author_ref_list}" "${author_ref_list}"
     sed -i "1,${limit}d" "${author_ref_list}"
     cat <"${author_ref_list}" >>"${delete_ref_list}"
 done <"${author_list}"
+
+# cat "${delete_ref_list}" >&2
 
 if ! [ -s "${delete_ref_list}" ]; then
     info "nothing to delete"
