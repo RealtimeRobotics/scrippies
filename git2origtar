@@ -167,7 +167,13 @@ readonly ts="$(git -C "${workdir}" show -s --format=%ct HEAD)"
 (
     cd "$(mktemp -d)"
     gitcopy "${workdir}"
+    # `sed 's/./\\&/g'`
     # http://www.etalabs.net/sh_tricks.html
+    #
+    # `--pax-option "exthdr.name=%d/PaxHeaders.0/%f"`
+    # https://www.gnu.org/software/tar/manual/html_section/tar_70.html#SEC147
+    # https://groups.google.com/forum/#!msg/golang-dev/8mY37Lc-AsQ/xC2oVQ2iEwAJ
+    # https://github.com/golang/go/issues/12358
     find . ! -type d \
         | sort \
         | sed 's/./\\&/g' \
@@ -176,7 +182,7 @@ readonly ts="$(git -C "${workdir}" show -s --format=%ct HEAD)"
             --owner=0 \
             --group=0 \
             --format=pax \
-            --pax-option "exthdr.name=%d/PaxHeaders/%f,atime:=${ts},ctime:=${ts},mtime:=${ts}" \
+            --pax-option "exthdr.name=%d/PaxHeaders.0/%f,atime:=${ts},ctime:=${ts},mtime:=${ts}" \
             --mtime=@"${ts}" \
             -rf "${outfile}"
 )
