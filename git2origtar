@@ -167,13 +167,55 @@ readonly ts="$(git -C "${workdir}" show -s --format=%ct HEAD)"
 (
     cd "$(mktemp -d)"
     gitcopy "${workdir}"
+
+    # ###############################################
+    # Explanation for a horrible little shell snippet
+    # ###############################################
+    #
     # `sed 's/./\\&/g'`
-    # http://www.etalabs.net/sh_tricks.html
+    #
+    # This is some shell trickery to deal with whitespace-containing
+    # filenames. The original belongs to Rich Felker, and it was good enough
+    # for me to steal when Makeself needed such a patch.
+    #
+    # * http://www.etalabs.net/sh_tricks.html
+    # * https://github.com/megastep/makeself/pull/153
+    #
     #
     # `--pax-option "exthdr.name=%d/PaxHeaders.0/%f"`
-    # https://www.gnu.org/software/tar/manual/html_section/tar_70.html#SEC147
-    # https://groups.google.com/forum/#!msg/golang-dev/8mY37Lc-AsQ/xC2oVQ2iEwAJ
-    # https://github.com/golang/go/issues/12358
+    #
+    # If tar tries to write a pax header, then this option should keep the PID
+    # (which is not deterministic) out of the archive. The golang folks do
+    # this, so it seems like a generally good idea for any tar implementation,
+    # not just GNU.
+    #
+    # * https://groups.google.com/forum/#!msg/golang-dev/8mY37Lc-AsQ/xC2oVQ2iEwAJ
+    # * https://github.com/golang/go/issues/12358
+    #
+    #
+    # `--pax-option="delete=atime"`
+    # `--pax-option="delete=ctime"`
+    # `--pax-option="delete=mtime"`
+    # `--mtime=0`
+    #
+    # This is some sillyness to force both GNU tar v1.28 (xenial) and v1.29
+    # (bionic) to deterministically create identical archives; i.e., any two
+    # with identical content will have identical checksums. This turns out to
+    # be Really Difficult.
+    #
+    # Here, with the `--pax-option=delete=atime,delete=ctime,delete=mtime`
+    # options, I'm asking `tar` to keep timestamps out of the archive. For
+    # reasons that escape me, this is necessary to stop GNU tar v1.29 from
+    # writing the Pax Header. Conversely, GNU tar v1.28 seems happy to omit the
+    # Pax Header under all the conditions I tested.
+    #
+    # Note that I'm _also_ specifying `--mtime=@${ts}` which causes the given
+    # Unix Timestamp to be written into the archive as the modification time
+    # for all members. A sane person would expect `--mtime=...` and
+    # `--pax-option="delete=mtime"` to mutually conflict, so that should inform
+    # your opinion of the GNU tar developers.
+    #
+    # * https://www.gnu.org/software/tar/manual/tar.html#SEC147
     find . ! -type d \
         | sort \
         | sed 's/./\\&/g' \
@@ -182,7 +224,10 @@ readonly ts="$(git -C "${workdir}" show -s --format=%ct HEAD)"
             --owner=0 \
             --group=0 \
             --format=pax \
-            --pax-option "exthdr.name=%d/PaxHeaders.0/%f,atime:=${ts},ctime:=${ts},mtime:=${ts}" \
+            --pax-option="exthdr.name=%d/PaxHeaders.0/%f" \
+            --pax-option="delete=atime" \
+            --pax-option="delete=ctime" \
+            --pax-option="delete=mtime" \
             --mtime=@"${ts}" \
             -rf "${outfile}"
 )
