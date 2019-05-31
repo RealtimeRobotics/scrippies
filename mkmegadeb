@@ -123,9 +123,31 @@ run_megadeb() {
     info "creating temporary apt configuration"
     enfake_apt "$(mktemp -dt fake_apt_dir.XXXXXX)"
 
-    # remove old apt sources list files
-    find "$(etc_apt)" -type f -name '*.list' -print -delete
-    find "$(var_lib_apt_lists)" -type f -print -delete
+    # TODO(neil): How should we treat the capability of installing "everything"
+    # from the Megadeb?
+    #
+    # First, it's not _really_ everything, since we stop traversing the
+    # recursive dependencies at the "bootstrap boundary"; i.e., those packages
+    # that either comprise dependency cycles (e.g. libc) or depend on udebs
+    # (Debian installer packages).
+    #
+    # Second, having _almost_ everything works great --- right up until, say,
+    # Canonical bumps the version of a certain package _beyond_ the bootstrap
+    # boundary; a certain package that we depended on via a version equivalence
+    # relationship. This situation is untenable because the dependency we
+    # "knew" we needed (A) we didn't pack because we couldn't and (B) Canonical
+    # stopped providing the specific version.
+    #
+    # The benefit to relying on the default apt lists is that, as our
+    # dependencies age out of existence, we can recover by leaning on the newer
+    # versions that we didn't bring with us. The drawback is that the megadebs
+    # are not truly "stand-alone" -- at least not in the same way that Debian
+    # installers are.
+    if false; then
+        # remove old apt sources list files
+        find "$(etc_apt)" -type f -name '*.list' -print -delete
+        find "$(var_lib_apt_lists)" -type f -print -delete
+    fi
 
     # install new apt sources list file
     cat >"$(etc_apt_sources_list_d)/$(echo "${here}" | tr -s '/' '_').list" <<EOF
@@ -141,7 +163,7 @@ EOF
         cat "${here}/install-list.txt"
     else
         find "${here}" -maxdepth 1 -type f -name '*.deb' \
-             -exec dpkg-deb --show --showformat='${Package}\n' {} \;
+            -exec dpkg-deb --show --showformat='${Package}\n' {} \;
     fi | xargs apt-get \
         -yqo APT::Sandbox::User="$(whoami)" \
         --no-install-recommends \
