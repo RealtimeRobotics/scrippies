@@ -1,0 +1,121 @@
+#!/bin/sh
+
+# scrippies/git-submodule-update-message
+
+set -eu
+
+readonly this="$(readlink -f "$0")"
+readonly here="$(dirname "${this}")"
+readonly whatami="$(basename "${this}")"
+readonly tmpdir="$(mktemp -dt "${whatami}.XXXXXX")"
+
+log() { echo "${whatami}[$$]: $@" >&2; }
+error() { log "ERROR: $@"; }
+warning() { log "WARNING: $@"; }
+info() { log "INFO: $@"; }
+
+die() {
+    error "$@"
+    usage >&2
+    exit 1
+}
+
+cleanup() {
+    status="$?"
+    rm -rf "${tmpdir}" || true
+    return "${status}"
+}
+
+usage() {
+    cat <<EOF
+Usage: $0 [OPTION]...
+Print summary of git submodule changes.
+
+Options
+    -h            print this usage and return success
+    -C WORKDIR    run as if started in WORKDIR (default: \$PWD)
+
+Examples:
+
+    \$ $0
+
+    \$ $0 -C ~/code/rapidplan
+
+EOF
+}
+
+# 3.282 Portable Filename Character Set
+# https://pubs.opengroup.org/onlinepubs/9699919799/basedefs/V1_chap03.html#tag_03_282
+filenamify() {
+    printf "$@" | tr -sc '[:alnum:]._-' '_'
+}
+
+################################################################################
+
+trap cleanup EXIT
+export TMPDIR="${tmpdir}"
+export LC_ALL=C
+
+while getopts ":hC:o:" opt; do
+    case "${opt}" in
+        h)
+            usage
+            exit "$?"
+            ;;
+        C)
+            if ! workdir="$(readlink -f "${OPTARG}")"; then
+                die "missing path: ${OPTARG}"
+            fi
+            if ! [ -d "${workdir}" ]; then
+                die "missing directory: ${workdir}"
+            fi
+            readonly workdir="${workdir}"
+            ;;
+        :) die "Missing argument: -${OPTARG}" ;;
+        \?) die "Invalid option: -${OPTARG}" ;;
+    esac
+done
+shift "$((${OPTIND} - 1))"
+
+# workdir
+if ! [ -n "${workdir:-}" ]; then
+    readonly workdir="${PWD}"
+    warning "defaulting workdir: ${workdir}"
+fi
+if ! git -C "${workdir}" rev-parse HEAD >/dev/null 2>&1; then
+    die "not a git checkout: ${workdir}"
+fi
+
+readonly sm_path_list="$(mktemp -t sm_path_list.XXXXXX)"
+git -C "${workdir}" submodule --quiet foreach 'echo ${sm_path}' >"${sm_path_list}"
+sort -uo "${sm_path_list}" "${sm_path_list}"
+
+if ! [ -s "${sm_path_list}" ]; then
+    info "no submodules"
+    exit "$?"
+fi
+
+readonly sm_path_begin_end_list="$(mktemp -t sm_path_begin_end_list.XXXXXX)"
+
+while read sm_path; do
+    sm_diff="$(mktemp -t "$(filenamify "${sm_path}").diff.XXXXXX")"
+    git -C "${workdir}" diff -- "${sm_path}" >"${sm_diff}"
+    sed -nri 's|^[-+]Subproject commit ([[:xdigit:]]{40})$|\1|gp' "${sm_diff}"
+
+    if ! [ -s "${sm_diff}" ]; then
+        continue
+    fi
+
+    if ! [ 2 -eq "$(wc -l <"${sm_diff}")" ]; then
+        die "$(wc "${sm_diff}")"
+    fi
+
+    printf "${sm_path}\t$(head -1 "${sm_diff}")\t$(tail -1 "${sm_diff}")\n" \
+           >>"${sm_path_begin_end_list}"
+done <"${sm_path_list}"
+
+printf "submodule update: $(cut -f1 <"${sm_path_begin_end_list}" | paste -sd,)\n"
+while read sm_path begin end; do
+    printf "\n${sm_path}:\n"
+    git --no-pager -C "${workdir}/${sm_path}" log --oneline --stat=80 "${begin}"..."${end}"
+done <"${sm_path_begin_end_list}"
