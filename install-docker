@@ -12,10 +12,10 @@ set -euvx
 sudo find /var/lib/apt/lists -mindepth 1 -delete
 sudo apt-get -y update
 sudo apt-get -y install --no-install-recommends \
-     apt-transport-https \
-     curl \
-     lsb-release \
-     software-properties-common
+    apt-transport-https \
+    curl \
+    lsb-release \
+    software-properties-common
 
 readonly docker_gpg="$(mktemp -t docker.gpg.XXXXXX)"
 readonly docker_list="$(mktemp -t docker.list.XXXXXX)"
@@ -33,9 +33,16 @@ sudo apt-get -y update
 sudo apt-cache policy docker-ce
 sudo apt-get -y install docker-ce
 
-sudo service docker start && \
-    echo "docker start win" || \
-    echo "docker start fail"
+# configure DNS servers used within containers; take whatever the host is using
+sudo tee /etc/docker/daemon.json <<EOF
+{
+  "dns": [
+    $(nmcli dev show | awk '/DNS/{print $NF}' | xargs -I{} printf "\"{}\"\n" | paste -sd,)
+  ]
+}
+EOF
+
+sudo service docker start
 
 sudo usermod -aG docker $(whoami)
 sudo docker run hello-world
