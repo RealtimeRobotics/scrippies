@@ -152,6 +152,41 @@ while getopts ":hAKLIXZ" opt; do
 done
 shift "$((${OPTIND} - 1))"
 
+# http://archive.ubuntu.com/ubuntu/dists/bionic/main/
+readonly ubuntu_arch_list="$(mktemp -t ubuntu_arch_list.XXXXXX)"
+cat >"${ubuntu_arch_list}" <<'EOF'
+amd64
+i386
+EOF
+
+# http://ports.ubuntu.com/ubuntu-ports/dists/bionic/main/
+readonly ubuntu_ports_arch_list="$(mktemp -t ubuntu_ports_arch_list.XXXXXX)"
+cat >"${ubuntu_ports_arch_list}" <<'EOF'
+arm64
+armhf
+ppc64el
+s390x
+EOF
+
+# http://packages.ros.org/ros/ubuntu/dists/bionic/main/
+readonly ros_arch_list="$(mktemp -t ros_arch_list.XXXXXX)"
+cat >"${ros_arch_list}" <<'EOF'
+amd64
+arm64
+armhf
+i386
+EOF
+
+readonly this_arch="$(dpkg --print-architecture)"
+
+if ! grep -q "${this_arch}" "${ubuntu_arch_list}" "${ubuntu_ports_arch_list}"; then
+    die "unsupported architecture: ${this_arch}"
+fi
+
+if ! grep -q "${this_arch}" "${ros_arch_list}"; then
+    die "unsupported architecture: ${this_arch}"
+fi
+
 case "$#" in
     0)
         warning "missing distribution; will attempt to discover"
@@ -337,22 +372,9 @@ EOF
 fi
 
 if [ "true" = "${install_lists:-false}" ]; then
-    # rando filesystem-resident apt repositories; I need some convention for
-    # where to put such things, so here's this:
-    find "/var/packages" -type f -name 'Packages' -exec dirname {} + \
-        | sort -u \
-        | while read repodir; do
-        (
-            cd "${repodir}"
-            read_into_generated "file://${PWD}" <<EOF
-deb     [trusted=yes] file://${PWD} ./
-EOF
-        )
-    done
-
     # ros
     if [ "true" = "${use_intranet:-false}" ]; then
-        readonly ros_url="http://10.164.5.14/apt/ros/${distribution}"
+        readonly ros_url="http://apt.realtime.cxm/apt/ros/${distribution}"
     else
         readonly ros_url="http://packages.ros.org/ros/ubuntu"
     fi
@@ -364,9 +386,17 @@ EOF
 
     # ubuntu
     if [ "true" = "${use_intranet:-false}" ]; then
-        readonly ubuntu_url="http://10.164.5.14/apt/ubuntu/${distribution}"
+        if grep "${this_arch}" "${ubuntu_ports_arch_list}"; then
+            readonly ubuntu_url="http://apt.realtime.cxm/apt/ubuntu-ports/${distribution}"
+        else
+            readonly ubuntu_url="http://apt.realtime.cxm/apt/ubuntu/${distribution}"
+        fi
     else
-        readonly ubuntu_url="http://archive.ubuntu.com/ubuntu"
+        if grep "${this_arch}" "${ubuntu_ports_arch_list}"; then
+            readonly ubuntu_url="http://ports.ubuntu.com/ubuntu-ports"
+        else
+            readonly ubuntu_url="http://archive.ubuntu.com/ubuntu"
+        fi
     fi
     info "ubuntu_url: ${ubuntu_url}"
 
