@@ -100,7 +100,7 @@ readonly sm_path_begin_end_list="$(mktemp -t sm_path_begin_end_list.XXXXXX)"
 while read sm_path; do
     sm_diff="$(mktemp -t "$(filenamify "${sm_path}").diff.XXXXXX")"
     git -C "${workdir}" diff -- "${sm_path}" >"${sm_diff}"
-    if grep -Eq '^[+]Subproject commit [[:xdigit:]]{40}-dirty' <"${sm_diff}"; then
+    if grep -Eq '^[+]Subproject commit [[:xdigit:]]{40}[-]dirty$' <"${sm_diff}"; then
         die "dirty submodule: ${sm_path}"
     fi
     sed -nri 's|^[-+]Subproject commit ([[:xdigit:]]{40})$|\1|gp' "${sm_diff}"
