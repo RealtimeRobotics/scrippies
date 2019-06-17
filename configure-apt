@@ -82,6 +82,10 @@ etc_apt_sources_list_d() {
     apt-config shell _ Dir _ Dir::Etc _ Dir::Etc::sourceparts | apt_config_path
 }
 
+etc_apt_apt_conf_d() {
+    apt-config shell _ Dir _ Dir::Etc _ Dir::Etc::parts | apt_config_path
+}
+
 # read stdin (assumed to be apt sources list file body) into the given apt
 # sources list file
 #
@@ -424,5 +428,17 @@ deb     ${ubuntu_url} ${distribution} main/debian-installer restricted/debian-in
 EOF
     fi
 fi
+
+# proactive protection against a bad proxy
+#
+# * https://askubuntu.com/questions/679233/failed-to-fetch-hash-sum-mismatch-tried-rm-apt-list-but-didnt-work
+# * https://serverfault.com/questions/722893/debian-mirror-hash-sum-mismatch
+# * https://gist.github.com/trastle/5722089
+info "install $(etc_apt_apt_conf_d)/99fixbadproxy"
+cat >"$(etc_apt_apt_conf_d)/99fixbadproxy" <<FIXBADPROXY
+Acquire::http::Pipeline-Depth "0";
+Acquire::http::No-Cache=True;
+Acquire::BrokenProxy=true;
+FIXBADPROXY
 
 exit "$?"
