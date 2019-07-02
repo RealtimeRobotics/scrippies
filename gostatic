@@ -24,7 +24,7 @@ Examples:
 
     \$ $0 -h
 
-    \$ $0 mvdan.cc/sh
+    \$ $0 mvdan.cc/sh/cmd/shfmt
 
     \$ $0 go.universe.tf/netboot/cmd/pixiecore
 
