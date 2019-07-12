@@ -92,8 +92,8 @@ is_good_version() {
     echo $@ | grep -Eq '^[[:digit:]]+\.[[:digit:]]+\.[[:digit:]]+-[[:digit:]]+-g[[:xdigit:]]{7,40}$'
 }
 
-# $1 : git checkout directory
-get_default_outfile() {
+# $1 : workdir
+infer_outfile() {
     local package_name="$(basename "$1")"
     if ! is_good_package_name "${package_name}"; then
         error "bad package_name: ${package_name}"
@@ -101,10 +101,64 @@ get_default_outfile() {
     fi
     local version="$(git -C "$1" describe --long --always)"
     if ! is_good_version "${version}"; then
-        error "bad version: ${version}"
-        return 1
+        if ! [ "true" = "${requested_force:-false}" ]; then
+            error "bad version: ${version}"
+            return 1
+        fi
+        warning "bad version: ${version}"
     fi
     echo "${PWD}/${package_name}_${version}.orig.tar"
+    return 0
+}
+
+vet_workdir() {
+    local result=""
+    if ! result="$(readlink -f "$1")"; then
+        error "bad path: $1"
+        return 1
+    fi
+    if ! [ -d "${result}" ]; then
+        error "missing directory: ${result}"
+        return 1
+    fi
+    if ! [ "${result}" = "$(git -C "${result}" rev-parse --show-toplevel)" ]; then
+        error "missing git dir: ${result}"
+        return 1
+    fi
+    if ! [ "true" = "$(git -C "${result}" rev-parse --is-inside-work-tree)" ]; then
+        error "is inside git work tree: ${result}"
+        return 1
+    fi
+    echo "${result}"
+    return 0
+}
+
+vet_outfile() {
+    local result=""
+    if ! result="$(readlink -f "$1")"; then
+        error "bad path: $1"
+        return 1
+    fi
+    if [ -f "${result}" ]; then
+        if ! [ "true" = "${requested_force:-false}" ]; then
+            error "exists: ${result}"
+            return 1
+        fi
+        warning "extant file: ${result}"
+        warning "$(rm -v "${result}")"
+    fi
+    echo "${result}"
+    return 0
+}
+
+vet_mtime() {
+    local result=""
+    if ! result="@$(date -d "$1" +%s)"; then
+        error "bad mtime: $1"
+        return 1
+    fi
+    echo "${result}"
+    return 0
 }
 
 ################################################################################
@@ -113,27 +167,15 @@ trap cleanup EXIT
 export TMPDIR="${tmpdir}"
 export LC_ALL=C
 
-while getopts ":hC:o:" opt; do
+while getopts ":hfC:o:" opt; do
     case "${opt}" in
         h)
             usage
             exit "$?"
             ;;
-        C)
-            if ! workdir="$(readlink -f "${OPTARG}")"; then
-                die "missing path: ${OPTARG}"
-            fi
-            if ! [ -d "${workdir}" ]; then
-                die "missing directory: ${workdir}"
-            fi
-            readonly workdir="${workdir}"
-            ;;
-        o)
-            if ! outfile="$(readlink -f "${OPTARG}")"; then
-                die "missing path: ${OPTARG}"
-            fi
-            readonly outfile="${outfile}"
-            ;;
+        f) requested_force="true" ;;
+        C) workdir="${OPTARG}" ;;
+        o) outfile="${OPTARG}" ;;
         :) die "Missing argument: -${OPTARG}" ;;
         \?) die "Invalid option: -${OPTARG}" ;;
     esac
@@ -142,80 +184,84 @@ shift "$((${OPTIND} - 1))"
 
 # workdir
 if ! [ -n "${workdir:-}" ]; then
-    readonly workdir="${PWD}"
-    warning "defaulting workdir: ${workdir}"
+    workdir="${PWD}"
+    warning "defaulted workdir: ${workdir}"
 fi
-if ! git -C "${workdir}" rev-parse HEAD >/dev/null 2>&1; then
-    die "not a git checkout: ${workdir}"
+if ! workdir="$(vet_workdir "${workdir}")"; then
+    die "FAILURE: vet_workdir ${workdir}"
 fi
+readonly workdir="${workdir}"
+info "workdir: ${workdir}"
 
 # outfile
 if ! [ -n "${outfile:-}" ]; then
-    if ! outfile="$(get_default_outfile "${workdir}")"; then
-        die "FAILURE: get_default_outfile ${workdir}"
-    fi
-    readonly outfile="${outfile}"
-    warning "defaulting outfile: ${outfile}"
+    outfile="$(infer_outfile "${workdir}")"
+    warning "inferred outfile: ${outfile}"
 fi
-if [ -f "${outfile}" ]; then
-    warning "extant outfile: ${outfile}"
-    warning "$(rm -v "${outfile}")"
+if ! outfile="$(vet_outfile "${outfile}")"; then
+    die "FAILURE: vet_outfile ${outfile}"
 fi
+readonly outfile="${outfile}"
+info "outfile: ${outfile}"
 
-# unix time stamp for HEAD commit
-readonly ts="$(git -C "${workdir}" show -s --format=%ct HEAD)"
+# mtime
+mtime="$(git -C "${workdir}" show -s --format=%ci HEAD)"
+if ! mtime="$(vet_mtime "${mtime}")"; then
+    die "FAILURE: vet_mtime ${mtime}"
+fi
+readonly mtime="${mtime}"
+info "mtime: ${mtime} ($(date -uIs -d "${mtime}"))"
+
+# ###############################################
+# Explanation for a horrible little shell snippet
+# ###############################################
+#
+# `sed 's/./\\&/g'`
+#
+# This is some shell trickery to deal with whitespace-containing filenames. The
+# original belongs to Rich Felker, and it was good enough for me to steal when
+# Makeself needed such a patch.
+#
+# * http://www.etalabs.net/sh_tricks.html
+# * https://github.com/megastep/makeself/pull/153
+#
+#
+# `--pax-option "exthdr.name=%d/PaxHeaders.0/%f"`
+#
+# If tar tries to write a pax header, then this option should keep the PID
+# (which is not deterministic) out of the archive. The golang folks do this, so
+# it seems like a generally good idea for any tar implementation, not just GNU.
+#
+# * https://groups.google.com/forum/#!msg/golang-dev/8mY37Lc-AsQ/xC2oVQ2iEwAJ
+# * https://github.com/golang/go/issues/12358
+#
+#
+# `--pax-option="delete=atime"`
+# `--pax-option="delete=ctime"`
+# `--pax-option="delete=mtime"`
+# `--mtime=0`
+#
+# This is some sillyness to force both GNU tar v1.28 (xenial) and v1.29
+# (bionic) to deterministically create identical archives; i.e., any two with
+# identical content will have identical checksums. This turns out to be Really
+# Difficult.
+#
+# Here, with the `--pax-option=delete=atime,delete=ctime,delete=mtime` options,
+# I'm asking `tar` to keep timestamps out of the archive. For reasons that
+# escape me, this is necessary to stop GNU tar v1.29 from writing the Pax
+# Header. Conversely, GNU tar v1.28 seems happy to omit the Pax Header under
+# all the conditions I tested.
+#
+# Note that I'm _also_ specifying `--mtime` which causes the given Unix
+# Timestamp to be written into the archive as the modification time for all
+# members. A sane person would expect `--mtime=...` and
+# `--pax-option="delete=mtime"` to mutually conflict, so that should inform
+# your opinion of the GNU tar developers.
+#
+# * https://www.gnu.org/software/tar/manual/tar.html#SEC147
 (
     cd "$(mktemp -d)"
     gitcopy "${workdir}"
-
-    # ###############################################
-    # Explanation for a horrible little shell snippet
-    # ###############################################
-    #
-    # `sed 's/./\\&/g'`
-    #
-    # This is some shell trickery to deal with whitespace-containing
-    # filenames. The original belongs to Rich Felker, and it was good enough
-    # for me to steal when Makeself needed such a patch.
-    #
-    # * http://www.etalabs.net/sh_tricks.html
-    # * https://github.com/megastep/makeself/pull/153
-    #
-    #
-    # `--pax-option "exthdr.name=%d/PaxHeaders.0/%f"`
-    #
-    # If tar tries to write a pax header, then this option should keep the PID
-    # (which is not deterministic) out of the archive. The golang folks do
-    # this, so it seems like a generally good idea for any tar implementation,
-    # not just GNU.
-    #
-    # * https://groups.google.com/forum/#!msg/golang-dev/8mY37Lc-AsQ/xC2oVQ2iEwAJ
-    # * https://github.com/golang/go/issues/12358
-    #
-    #
-    # `--pax-option="delete=atime"`
-    # `--pax-option="delete=ctime"`
-    # `--pax-option="delete=mtime"`
-    # `--mtime=0`
-    #
-    # This is some sillyness to force both GNU tar v1.28 (xenial) and v1.29
-    # (bionic) to deterministically create identical archives; i.e., any two
-    # with identical content will have identical checksums. This turns out to
-    # be Really Difficult.
-    #
-    # Here, with the `--pax-option=delete=atime,delete=ctime,delete=mtime`
-    # options, I'm asking `tar` to keep timestamps out of the archive. For
-    # reasons that escape me, this is necessary to stop GNU tar v1.29 from
-    # writing the Pax Header. Conversely, GNU tar v1.28 seems happy to omit the
-    # Pax Header under all the conditions I tested.
-    #
-    # Note that I'm _also_ specifying `--mtime=@${ts}` which causes the given
-    # Unix Timestamp to be written into the archive as the modification time
-    # for all members. A sane person would expect `--mtime=...` and
-    # `--pax-option="delete=mtime"` to mutually conflict, so that should inform
-    # your opinion of the GNU tar developers.
-    #
-    # * https://www.gnu.org/software/tar/manual/tar.html#SEC147
     find . ! -type d \
         | sort \
         | sed 's/./\\&/g' \
@@ -228,8 +274,9 @@ readonly ts="$(git -C "${workdir}" show -s --format=%ct HEAD)"
             --pax-option="delete=atime" \
             --pax-option="delete=ctime" \
             --pax-option="delete=mtime" \
-            --mtime=@"${ts}" \
+            --mtime="${mtime}" \
             -rf "${outfile}"
 )
 
 echo "${outfile}"
+exit "$?"
