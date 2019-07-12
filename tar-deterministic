@@ -34,16 +34,18 @@ Create a deterministic tarball from the contents of working directory.
 Options:
     -h            print this usage and return success
     -C WORKDIR    run as if started in WORKDIR (default: \$PWD)
-    -o OUTFILE    write to OUTFILE (default: \$WORKDIR.tar)
     -m MTIME      override mtime (default: "now")
+    -o OUTFILE    write to OUTFILE (default: \$WORKDIR.tar)
 
 Examples:
 
     \$ $(basename ${this})
 
-    \$ $(basename ${this}) -C \$PWD
+    \$ $(basename ${this}) -C foo/bar
 
-    \$ $(basename ${this}) -C \$PWD -o \$PWD.tar
+    \$ $(basename ${this}) -C foo/bar -m "2019-06-05 18:03:36"
+
+    \$ $(basename ${this}) -C foo/bar -m "2019-06-05 18:03:36" -o foobar_0123.tar
 
 Notes:
 
