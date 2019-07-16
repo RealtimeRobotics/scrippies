@@ -87,7 +87,30 @@ EOF
     exit "$?"
 fi
 
+
+# References
+# ==========
+# 
+# * https://github.com/golang/go/issues/19226 : cmd/compile: Go compiled
+# binaries with ldflags "-s -w" reveal too much information
+#
+# * https://github.com/brimstone/docker-golang-musl : a container to build
+# golang static binaries with musl instead of glibc
+#
+# http://dominik.honnef.co/posts/2015/06/statically_compiled_go_programs__always__even_with_cgo__using_musl/
+# : Statically compiled Go programs, always, even with cgo, using musl
+
 for pkg in $@; do
     /usr/local/go/bin/go get -v -d "${pkg}/..."
-    /usr/local/go/bin/go build -a -buildmode=pie -ldflags='-linkmode external -extldflags "-static"' "${pkg}"
+
+    # $ go tool link -help
+    # $ go help build
+    # 
+    # * https://golang.org/cmd/link
+    # * https://golang.org/cmd/go/#hdr-Compile_packages_and_dependencies
+    /usr/local/go/bin/go \
+        build \
+        -a -buildmode=pie \
+        -ldflags='-s -w -linkmode external -extldflags "-static"' \
+        "${pkg}"
 done
