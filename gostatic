@@ -28,6 +28,8 @@ Examples:
 
     \$ $0 go.universe.tf/netboot/cmd/pixiecore
 
+    \$ $0 github.com/mholt/archiver/cmd/arc
+
 EOF
 }
 
@@ -99,15 +101,18 @@ fi
 #
 # http://dominik.honnef.co/posts/2015/06/statically_compiled_go_programs__always__even_with_cgo__using_musl/
 # : Statically compiled Go programs, always, even with cgo, using musl
+#
+# * https://golang.org/cmd/go/#hdr-Compile_packages_and_dependencies : `go help build`
+#
+# * https://golang.org/cmd/go/#hdr-Build_modes : `go help buildmode`
+# 
+# * https://golang.org/cmd/link : `go tool link -help`
+# 
+# * https://golang.org/cmd/compile : `go tool compile -help`
 
 for pkg in $@; do
     /usr/local/go/bin/go get -v -d "${pkg}/..."
 
-    # $ go tool link -help
-    # $ go help build
-    # 
-    # * https://golang.org/cmd/link
-    # * https://golang.org/cmd/go/#hdr-Compile_packages_and_dependencies
     /usr/local/go/bin/go \
         build \
         -a -buildmode=pie \
