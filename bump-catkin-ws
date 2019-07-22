@@ -65,8 +65,8 @@ export LC_ALL=C
 
 while [ 0 -lt "$#" ]; do
     case "$1" in
-        -h|--help)
-	        usage
+        -h | --help)
+            usage
             exit "$?"
             ;;
         -C)
@@ -83,8 +83,8 @@ while [ 0 -lt "$#" ]; do
             readonly catkin_ws="${catkin_ws}"
             shift
             ;;
-        -n|--dry-run)
-	        readonly dry_run="true"
+        -n | --dry-run)
+            readonly dry_run="true"
             ;;
         --major)
             readonly bump="major"
@@ -130,8 +130,8 @@ find "${catkin_ws}/src" -type f -name 'package.xml' >"${package_xml_list}"
 
 readonly triplet_list="$(mktemp -t triplet_list.XXXXXX)"
 xargs sed -nr \
-     's|.*<version>([[:digit:]]+\.[[:digit:]]+\.[[:digit:]]+)</version>.*|\1|gp' \
-     <"${package_xml_list}" >"${triplet_list}"
+    's|.*<version>([[:digit:]]+\.[[:digit:]]+\.[[:digit:]]+)</version>.*|\1|gp' \
+    <"${package_xml_list}" >"${triplet_list}"
 sort -uo "${triplet_list}" "${triplet_list}"
 
 if ! [ 1 -eq "$(wc -l <"${triplet_list}")" ]; then
@@ -178,8 +178,8 @@ fi
 # new_triplet; this is pretty aggressive and may collide with version strings
 # that we _don't_ want to change
 xargs sed -r ${sed_opts} \
-        "s|${old_major}\.${old_minor}\.${old_patch}|${new_major}\.${new_minor}\.${new_patch}|g" \
-        <"${package_xml_list}"
+    "s|${old_major}\.${old_minor}\.${old_patch}|${new_major}\.${new_minor}\.${new_patch}|g" \
+    <"${package_xml_list}"
 
 if ! [ "true" = "${git_commit:-false}" ]; then
     exit "$?"
