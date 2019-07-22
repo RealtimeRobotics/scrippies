@@ -155,7 +155,7 @@ git -C "${workdir}" \
     --format='%(authoremail)%09%(committerdate:iso-local)%09%(refname)' \
     >"${ref_list}"
 sed -nri "/refs\/remotes\/${remote}\/[[:graph:]]+/p" "${ref_list}"
-sed -ri "/(HEAD|master|stable|release-[[:alnum:].]+)$/d" "${ref_list}"
+sed -ri "/(HEAD|master|stable|release-[[:alnum:].-]+)$/d" "${ref_list}"
 sort -uo "${ref_list}" "${ref_list}"
 
 # cat "${ref_list}" >&2
