@@ -1,0 +1,85 @@
+#!/bin/sh
+
+# scrippies/install-clang
+
+set -eu
+
+readonly this="$(readlink -f "$0")"
+readonly whatami="$(basename "${this}")"
+
+log() { echo "${whatami}[$$]: $@" >&2; }
+error() { log "ERROR: $@"; }
+
+die() {
+    error "$@"
+    usage >&2
+    exit 1
+}
+
+usage() {
+    cat <<EOF
+Usage: $0 [OPTION]
+Install and set up clang.
+
+Options:
+
+    -h    print usage and exit
+    -u    uninstall
+
+Examples:
+
+    \$ $0
+
+    \$ $0 -u
+
+EOF
+}
+
+################################################################################
+
+if ! [ 0 -eq "$(id -u)" ]; then
+    die "non-root invocation"
+fi
+
+while getopts ":hu" opt; do
+    case "${opt}" in
+        h)
+            usage
+            exit 0
+            ;;
+        u) readonly uninstall="true" ;;
+        :) die "missing argument: -${OPTARG}" ;;
+        \?) die "bad option: -${OPTARG}" ;;
+    esac
+done
+shift "$((${OPTIND} - 1))"
+
+if [ "true" = "${uninstall:-false}" ]; then
+    update-alternatives --remove cc "$(command -v clang-6.0)"
+    update-alternatives --remove c++ "$(command -v clang++-6.0)"
+    apt-get purge -y \
+        clang-6.0 clang-format-6.0 clang-tools-6.0 libclang-6.0-dev libomp-dev
+else
+    apt-get update -y
+    apt-get install -y --no-install-recommends \
+        clang-6.0 clang-format-6.0 clang-tools-6.0 libclang-6.0-dev libomp-dev
+
+    update-alternatives \
+        --install /usr/bin/cc cc "$(command -v clang-6.0)" 1000 \
+        --slave /usr/share/man/man1/cc.1.gz cc.1.gz "$(dpkg -L clang-6.0 | grep -Eo '^/usr/share/man/man1/[^/]+$')"
+
+    update-alternatives \
+        --install /usr/bin/c++ c++ "$(command -v clang++-6.0)" 1000 \
+        --slave /usr/share/man/man1/c++.1.gz c++.1.gz "$(dpkg -L clang-6.0 | grep -Eo '^/usr/share/man/man1/[^/]+$')"
+
+    if [ -f /etc/dkms/framework.conf ]; then
+        if ! grep -q '^export CC=gcc$' /etc/dkms/framework.conf; then
+            echo "export CC=gcc" >>/etc/dkms/framework.conf
+        fi
+        if ! grep -q '^export CXX=g++$' /etc/dkms/framework.conf; then
+            echo "export CXX=g++" >>/etc/dkms/framework.conf
+        fi
+    fi
+fi
+
+exit "$?"
