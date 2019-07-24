@@ -1,0 +1,110 @@
+#!/bin/sh
+
+# scrippies/mount-sshfs
+
+set -euvx
+
+readonly this="$(readlink -f "$0")"
+readonly here="$(dirname "${this}")"
+readonly whatami="$(basename "${this}")"
+readonly tmpdir="$(mktemp -dt "${whatami}.XXXXXX")"
+
+log() { echo "${whatami}[$$]: $@" >&2; }
+error() { log "ERROR: $@"; }
+warning() { log "WARNING: $@"; }
+info() { log "INFO: $@"; }
+
+die() {
+    error "$@"
+    usage >&2
+    exit 1
+}
+
+cleanup() {
+    local status="$?"
+    rm -rf "${tmpdir}" || true
+    return "${status}"
+}
+
+usage() {
+    cat <<EOF
+Usage: $0 [OPTION]... HOSTNAME
+Mount via sshfs HOSTNAME to \$HOME/mnt/HOSTNAME.
+
+Options:
+
+    -h    print this usage and return success
+    -u    unmount
+
+Examples:
+
+    \$ $0 -h
+
+    \$ $0 host42.example.com
+
+    \$ $0 -u host42.example.com
+
+EOF
+}
+
+################################################################################
+
+trap cleanup EXIT
+export TMPDIR="${tmpdir}"
+export LC_ALL=C
+
+while getopts ":hu" opt; do
+    case "${opt}" in
+        h)
+            usage
+            exit "$?"
+            ;;
+        u) requested_unmount="true" ;;
+        :) die "Missing argument: -${OPTARG}" ;;
+        \?) die "Invalid option: -${OPTARG}" ;;
+    esac
+done
+shift "$((${OPTIND} - 1))"
+
+if ! [ 1 -eq "$#" ]; then
+    die "bad args"
+fi
+
+if ! command -v fusermount >/dev/null 2>&1; then
+    die "missing program: fusermount"
+fi
+
+if ! command -v sshfs >/dev/null 2>&1; then
+    die "missing program: sshfs"
+fi
+
+if ! [ -n "${HOME:-}" ]; then
+    warning "undefined \$HOME"
+    if ! getent_passwd_all="$(getent passwd "$(id -u)")"; then
+        die "FAILURE: getent passwd $(id -u)"
+    fi
+    getent_passwd_home="$(echo "${getent_passwd_all}" | cut -d: -f6)"
+    if ! [ -n "${getent_passwd_home}" ]; then
+        die "bad getent passwd: ${getent_passwd_all}"
+    fi
+    export HOME="${getent_passwd_home}"
+    warning "inferred \$HOME: ${HOME}"
+fi
+
+readonly mount_dir="${HOME}/mnt/$1"
+
+if [ "true" = "${requested_unmount:-false}" ]; then
+    sync
+    fusermount -u "${mount_dir}" >&2
+    exit "$?"
+fi
+
+if ! [ -d "${mount_dir}" ]; then
+    warning "missing directory: ${mount_dir}"
+    mkdir -vp "${mount_dir}" >&2
+fi
+
+sshfs -o sshfs_debug,reconnect,workaround=all "$1:/" "${mount_dir}" >&2
+sync
+
+exit "$?"
