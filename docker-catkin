@@ -9,7 +9,7 @@ readonly here="$(dirname "${this}")"
 readonly whatami="$(basename "${this}")"
 readonly tmpdir="$(mkdir -p "${HOME}/tmp" && mktemp -d "${HOME}/tmp/${whatami}.XXXXXX")"
 
-readonly default_root_script="$(noop="$(mktemp -t noop.XXXXXX)"; chmod +x "${noop}"; echo "${noop}")"
+readonly default_root_script="$(noop="$(mktemp "${tmpdir}/noop.XXXXXX")"; chmod +x "${noop}"; echo "${noop}")"
 readonly default_distribution="xenial"
 readonly default_ros_distro="kinetic"
 
