@@ -1,6 +1,6 @@
 #!/bin/sh
 
-# virt-this/drive
+# scrippies/qemu-catkin
 
 set -euvx
 
