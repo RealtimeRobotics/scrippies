@@ -6,7 +6,7 @@ set -euvx
 
 readonly this="$(readlink -f "$0")"
 readonly here="$(dirname "${this}")"
-readonly whatami="$(basename "${here}").$(basename "${this}")"
+readonly whatami="$(basename "${this}")"
 readonly tmpdir="$(mkdir -p "${HOME}/tmp" && mktemp -d "${HOME}/tmp/${whatami}.XXXXXX")"
 
 readonly default_distribution="xenial"
@@ -175,7 +175,12 @@ fi
 if ! command -v qemu-system-x86_64 >/dev/null 2>&1; then
     die "missing command: qemu-system-x86_64"
 fi
-info "$(qemu-system-x86_64 -version)"
+info "$(qemu-system-x86_64 -version | tr -s '[:space:]' ' ')"
+readonly need_qemu_version="4.0.0"
+readonly have_qemu_version="$(qemu-system-x86_64 -version | grep -Eo '[0-9]+([.][0-9]+){2}')"
+if ! (echo "${need_qemu_version}"; echo "${have_qemu_version}";) | sort -c; then
+    die "bad qemu version; need ${need_qemu_version}; have ${have_qemu_version}"
+fi
 
 # check vfio_pci
 if ! lsmod | grep -Eq '^vfio_pci\b'; then
@@ -439,12 +444,14 @@ if ! [ -n "${initrd}" ]; then
     die "missing initrd"
 fi
 
+
+
 # > With the -snapshot flag, any changes made to the virtual machine while it
 # > is running are written to temporary files and thrown away when the virtual
 # > machine is turned off.
 #
 # https://wiki.qemu.org/Documentation/CreateSnapshot#Temporary_snapshots
-sudo /opt/qemu/bin/qemu-system-x86_64 \
+sudo "$(command -v qemu-system-x86_64)" \
     -kernel "${kernel}" \
     -initrd "${initrd}" \
     -hda "${rootfs_qcow2}" \
@@ -454,6 +461,7 @@ sudo /opt/qemu/bin/qemu-system-x86_64 \
     -serial stdio \
     -machine q35 \
     -m 1G \
+    -virtfs local,path="${here}",mount_tag=host0,security_model=passthrough,id=host0 \
     -usb -device usb-host,hostbus="${realsense_bus}",hostaddr="${realsense_dev}" \
     $(xargs <"${qemu_opts}")
 
