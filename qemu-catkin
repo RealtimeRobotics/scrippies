@@ -65,8 +65,8 @@ infer_distribution() {
             echo "bionic"
             return 0
             ;;
-        *)
-            ;;
+        *) ;;
+
     esac
     error "unknown ros_distro: $1"
     return 1
@@ -178,7 +178,10 @@ fi
 info "$(qemu-system-x86_64 -version | tr -s '[:space:]' ' ')"
 readonly need_qemu_version="4.0.0"
 readonly have_qemu_version="$(qemu-system-x86_64 -version | grep -Eo '[0-9]+([.][0-9]+){2}')"
-if ! (echo "${need_qemu_version}"; echo "${have_qemu_version}";) | sort -c; then
+if ! (
+    echo "${need_qemu_version}"
+    echo "${have_qemu_version}"
+) | sort -c; then
     die "bad qemu version; need ${need_qemu_version}; have ${have_qemu_version}"
 fi
 
@@ -294,46 +297,67 @@ readonly rootfs_dir="${here}/rootfs"
 if ! [ -d "${rootfs_dir}" ]; then
     mkdir -vp "${rootfs_dir}"
     docker container run --rm "${image_name}" \
-           tar c -f- -C / \
-           --exclude './dev/*' \
-           --exclude './proc/*' \
-           --exclude './sys/*' \
-           --exclude './.dockerenv' \
-           --exclude './initrd.img*' \
-           --exclude './vmlinuz*' \
-           . \
+        tar c -f- -C / \
+        --exclude './dev/*' \
+        --exclude './proc/*' \
+        --exclude './sys/*' \
+        --exclude './.dockerenv' \
+        --exclude './initrd.img*' \
+        --exclude './vmlinuz*' \
+        . \
         | tar x -f- -C "${rootfs_dir}"
 fi
 
+# because we're using the host kernel, we also have to use the host modules
+cp -r "/lib/modules/$(uname -r)" "${rootfs_dir}/lib/modules"
+
+# because nouveau will grab the graphics card if we don't prevent it
+cat >"${rootfs_dir}/etc/modprobe.d/nouveau.conf" <<EOF
+blacklist nouveau
+EOF
+
 # https://raymii.org/s/tutorials/Run_software_on_tty1_console_instead_of_login_getty.html
 # http://0pointer.de/blog/projects/serial-console.html
-
 readonly override_conf="/etc/systemd/system/serial-getty@ttyS0.service.d/override.conf"
 # readonly override_conf="/etc/systemd/system/getty@tty1.service.d/override.conf"
 
 info "installing fetty script"
 tee "${rootfs_dir}/root/fetty" <<EOF
 #!/bin/sh
+
 set -euvx
+
 this=\$(readlink -e \${0})
 here=\$(dirname \${this})
+
 echo "=== \${this} BEGIN ==="
 sleep 3
 
 # http://man7.org/linux/man-pages/man7/bootparam.7.html
 mount --no-mtab --option remount,rw /
+
+# https://superuser.com/questions/628169/how-to-share-a-directory-with-the-host-without-networking-in-qemu
+modprobe 9p
+mkdir -vp /mnt/my9p
+mount -t 9p -o trans=virtio,version=9p2000.L host0 /mnt/my9p
+
 mount
 sleep 3
 
 echo "=== THIS IS THE ACTION ==="
+ls -lah /mnt/my9p
 sleep 3
+
+# https://unix.stackexchange.com/questions/443017/can-i-make-qemu-exit-with-failure-on-kernel-panic
+modprobe pvpanic
+poweroff -f
 
 rm -vf ${override_conf}
 sleep 3
 systemctl daemon-reload
 sleep 3
 echo "=== \${this} END ==="
-sleep 9999999
+sleep 999999
 EOF
 chmod +x "${rootfs_dir}/root/fetty"
 
@@ -352,16 +376,17 @@ readonly serial_getty_service="${rootfs_dir}/lib/systemd/system/serial-getty@.se
 
 info "installing systemd getty override"
 mkdir -vp "$(dirname "${rootfs_dir}/${override_conf}")"
-tee "${rootfs_dir}/${override_conf}" <<'EOF'
-#  This file is part of systemd.
+
+tee "${rootfs_dir}/${override_conf}" <<EOF
+# ${override_conf}
 #
-#  systemd is free software; you can redistribute it and/or modify it
-#  under the terms of the GNU Lesser General Public License as published by
-#  the Free Software Foundation; either version 2.1 of the License, or
-#  (at your option) any later version.
+# This file is a shameless rip of
+# lib/systemd/system/serial-getty@.service. This file is what systemd calls an
+# "override" --- it supersedes the similarly-named service that _would_ have
+# run if the override didn't exist.
 
 [Unit]
-Description=Serial Getty on %I
+Description=Serial Fetty on %I
 Documentation=man:agetty(8) man:systemd-getty-generator(8)
 Documentation=http://0pointer.de/blog/projects/serial-console.html
 BindsTo=dev-%i.device
@@ -443,8 +468,6 @@ readonly initrd="$(find /boot -maxdepth 1 -type f -name "initrd.img-$(uname -r)"
 if ! [ -n "${initrd}" ]; then
     die "missing initrd"
 fi
-
-
 
 # > With the -snapshot flag, any changes made to the virtual machine while it
 # > is running are written to temporary files and thrown away when the virtual
