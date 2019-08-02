@@ -1,0 +1,473 @@
+#!/bin/sh
+
+# scrippies/qemu-wrap
+
+set -euvx
+
+readonly this="$(readlink -f "$0")"
+readonly here="$(dirname "${this}")"
+readonly whatami="$(basename "${this}")"
+readonly tmpdir="$(mkdir -p "${HOME}/tmp" && mktemp -d "${HOME}/tmp/${whatami}.XXXXXX")"
+
+readonly default_image_name="registry.gitlab.com/realtime-robotics/ros-dpkg:latest"
+
+log() { echo "${whatami}[$$]: $@" >&2; }
+error() { log "ERROR: $@"; }
+warning() { log "WARNING: $@"; }
+info() { log "INFO: $@"; }
+
+die() {
+    error "$@"
+    usage >&2
+    exit 1
+}
+
+cleanup() {
+    local status="$?"
+    rm -rf "${tmpdir}"
+    return "${status}"
+}
+
+usage() {
+    cat <<EOF
+Usage: $0 [OPTION]... [-- [CMD] [ARG]...]
+Do your thing inside a qemu vm.
+
+Options:
+
+    -h                 print usage and exit
+    -C WORKDIR         run as if started in WORKDIR (default: \$PWD)
+    -I IMAGE_NAME      use rootfs from given docker image (default: ${default_image_name})
+    -x EXECUTABLE      run EXECUTABLE before CMD, multiple EXECUTABLEs run in order given
+
+Examples:
+
+    \$ $0 -- ls -lah
+
+    \$ $0 -I busybox -x hello-busybox.sh -- pwd
+
+EOF
+}
+
+# 3.282 Portable Filename Character Set
+# https://pubs.opengroup.org/onlinepubs/9699919799/basedefs/V1_chap03.html#tag_03_282
+filenamify() {
+    echo "$@" \
+        | sed -r 's/^[[:space:]]*//g;s/[[:space:]]*$//g' \
+        | tr -sc '[:alnum:]._-' '_'
+}
+
+vet_executable() {
+    local result=""
+    if ! result="$(readlink -f "$1")"; then
+        error "bad path: $1"
+        return 1
+    fi
+    if ! [ -f "${result}" ]; then
+        error "not regular file: ${result}"
+        return 1
+    fi
+    if ! [ -x "${result}" ]; then
+        error "not executable file: ${result}"
+        return 1
+    fi
+    echo "${result}"
+    return 0
+}
+
+# https://www.etalabs.net/sh_tricks.html
+save_args() {
+    for i; do printf %s\\n "$i" | sed "s/'/'\\\\''/g;1s/^/'/;\$s/\$/' \\\\/"; done
+    echo " "
+}
+
+################################################################################
+
+trap cleanup EXIT
+export TMPDIR="${tmpdir}"
+export LC_ALL=C
+
+readonly executable_list="$(mktemp -t executable_list.XXXXXX)"
+
+while getopts ":hIC::" opt; do
+    case "${opt}" in
+        h)
+            usage
+            exit 0
+            ;;
+        x)
+            if ! executable="$(vet_executable "${OPTARG}")"; then
+                die "FAILURE: vet_executable ${OPTARG}"
+            fi
+            echo "${executable}" >>"${executable_list}"
+            ;;
+        C)
+            if ! workdir="$(readlink -f "${OPTARG}")"; then
+                die "missing path: ${OPTARG}"
+            fi
+            if ! [ -d "${workdir}" ]; then
+                die "not a directory: ${workdir}"
+            fi
+            readonly workdir="${workdir}"
+            ;;
+        I) readonly image_name="${OPTARG}" ;;
+        :) die "missing argument: -${OPTARG}" ;;
+        \?) die "bad option: -${OPTARG}" ;;
+    esac
+done
+shift "$((${OPTIND} - 1))"
+readonly saved_args="$(save_args $@)"
+
+# workdir
+if [ -n "${workdir:-}" ]; then
+    info "workdir: ${workdir}"
+else
+    readonly workdir="${PWD}"
+    warning "defaulting workdir: ${workdir}"
+fi
+
+################################################################################
+
+# check hardware virtualization
+#
+# https://stackoverflow.com/questions/36397351/check-if-virtualization-is-enabled-without-sudo-on-centos-7
+if ! command -v kvm-ok >/dev/null 2>&1; then
+    die "missing command: kvm-ok"
+fi
+if ! kvm-ok >&2; then
+    die "FAILURE: kvm-ok"
+fi
+
+# check qemu
+if ! command -v qemu-system-x86_64 >/dev/null 2>&1; then
+    die "missing command: qemu-system-x86_64"
+fi
+info "$(qemu-system-x86_64 -version | tr -s '[:space:]' ' ')"
+readonly need_qemu_version="4.0.0"
+readonly have_qemu_version="$(qemu-system-x86_64 -version | grep -Eo '[0-9]+([.][0-9]+){2}')"
+if ! (
+    echo "${need_qemu_version}"
+    echo "${have_qemu_version}"
+) | sort -c; then
+    die "bad qemu version; need ${need_qemu_version}; have ${have_qemu_version}"
+fi
+
+# TODO: figure out a way to check if the found qemu-system-x86_64 supports USB
+# passthrough and/or virtFS
+#
+# Until I get that feature detection working, we need _a priori_ knowledge of
+# the feature set. To wit, this is how I configure qemu when I'm building from
+# source:
+#
+# $ ./configure --prefix=/opt/qemu --enable-system --enable-kvm --enable-libusb --enable-virtfs
+#
+# Something weird: When the installation prefix is under your home directory,
+# `make install` refuses to install any `qemu-system-*` binaries. The following
+# seems to work okay, though:
+#
+# $ `configure --prefix=$(mktemp -dt prefix.XXXXXX)` ...
+
+# check vfio_pci
+if ! lsmod | grep -Eq '^vfio_pci\b'; then
+    die "missing kernel module: vfio_pci"
+fi
+
+#########################
+# PCI PASSTHROUGH BEGIN #
+#########################
+
+# http://vfio.blogspot.com/
+# https://bufferoverflow.io/gpu-passthrough/
+# https://null-src.com/posts/qemu-vfio-pci/post.php
+# https://superuser.com/questions/1112238/intel-iommu-on-but-no-iommu-groups
+# https://unix.stackexchange.com/questions/328422/pci-stub-vs-vfio-pci
+# https://wiki.archlinux.org/index.php/PCI_passthrough_via_OVMF#Isolating_the_GPU
+
+if false; then
+    # check iommu groups
+    readonly iommu_group_list="$(mktemp -t iommu_group_list.XXXXXX)"
+    find /sys/kernel/iommu_groups -maxdepth 1 -mindepth 1 >"${iommu_group_list}"
+    sort -n -t '/' -k 5 -o "${iommu_group_list}" "${iommu_group_list}"
+    readonly device_list="$(mktemp -t device_list.XXXXXX)"
+    while read iommu_group; do
+        info "IOMMU Group $(basename "${iommu_group}"):"
+        find "${iommu_group}/devices" -maxdepth 1 -mindepth 1 >"${device_list}"
+        sort -o "${device_list}" "${device_list}"
+        while read device; do
+            info "    $(lspci -nnDs "$(basename "${device}")")"
+        done <"${device_list}"
+    done <"${iommu_group_list}"
+fi
+
+# enumerate NVIDIA slots
+readonly nvidia_slot_list="$(mktemp -t nvidia_slot_list.XXXXXX)"
+if ! lspci -Dd '0x10de::' >"${nvidia_slot_list}"; then
+    die "FAILURE: lspci -Dd '0x10de::'"
+fi
+
+# > domains are numbered from 0 to ffff), bus (0 to ff), slot (0 to 1f) and
+# > function (0 to 7)
+#
+# -- man 8 lspci
+sed -ri 's|^([[:xdigit:]]{4}:[[:xdigit:]]{2}:[01][[:xdigit:]][.][0-7])\b.*|\1|g' "${nvidia_slot_list}"
+sort -uo "${nvidia_slot_list}" "${nvidia_slot_list}"
+cat "${nvidia_slot_list}" >&2
+
+# foreach nvidia slot:
+# * make sure the device is using the vfio-pci driver
+# * then add an associated qemu option
+readonly qemu_opts="$(mktemp -t qemu_opts.XXXXXX)"
+while read nvidia_slot; do
+    if ! lspci -vkms "${nvidia_slot}" | grep -Eq '^Driver:[[:space:]]+vfio-pci'; then
+        die "bad driver: $(lspci -s "${nvidia_slot}")"
+    fi
+    echo "-device vfio-pci,host=${nvidia_slot}" >>"${qemu_opts}"
+done <"${nvidia_slot_list}"
+cat "${qemu_opts}" >&2
+
+#######################
+# PCI PASSTHROUGH END #
+#######################
+
+#########################
+# USB PASSTHROUGH BEGIN #
+#########################
+
+# https://unix.stackexchange.com/questions/250938/qemu-usb-passthrough-windows-guest
+# https://qemu.weilnetz.de/doc/qemu-doc.html#host_005fusb_005fdevices
+# http://blog.eciton.net/uefi/qemu-usb-passthrough.html
+
+# vendor "0x8086": Intel Corp.
+# product "0x0b07": Realsense Depth Camera 435
+readonly realsense_list="$(mktemp -t realsense_list.XXXXXX)"
+if ! lsusb -d '0x8086:0x0b07' >"${realsense_list}"; then
+    die "FAILURE: lsusb -d 0x8086:0x0b07"
+fi
+if ! [ 1 -eq "$(wc -l <"${realsense_list}")" ]; then
+    die "too many: lsusb -d 0x8086:0x0b07"
+fi
+cat "${realsense_list}" >&2
+readonly realsense_bus="$(sed -nr 's|^Bus ([[:digit:]]+) Device [[:digit:]]+: .*$|\1|gp' <"${realsense_list}")"
+if ! [ -n "${realsense_bus}" ]; then
+    die "failed to parse realsense_bus"
+fi
+readonly realsense_dev="$(sed -nr 's|^Bus [[:digit:]]+ Device ([[:digit:]]+): .*$|\1|gp' <"${realsense_list}")"
+if ! [ -n "${realsense_dev}" ]; then
+    die "failed to parse realsense_dev"
+fi
+
+#######################
+# USB PASSTHROUGH END #
+#######################
+
+################
+# ROOTFS BEGIN #
+################
+
+if ! command -v docker >/dev/null 2>&1; then
+    die "missing command: docker"
+fi
+if ! command -v qemu-img >/dev/null 2>&1; then
+    die "missing command: qemu-img"
+fi
+if ! command -v guestfish >/dev/null 2>&1; then
+    die "missing command: guestfish"
+fi
+
+readonly image_name="registry.gitlab.com/realtime-robotics/ros-dpkg:${ros_distro}"
+readonly rootfs_dir="${here}/rootfs"
+if ! [ -d "${rootfs_dir}" ]; then
+    mkdir -vp "${rootfs_dir}"
+    docker container run --rm "${image_name}" \
+        tar c -f- -C / \
+        --exclude './dev/*' \
+        --exclude './proc/*' \
+        --exclude './sys/*' \
+        --exclude './.dockerenv' \
+        --exclude './initrd.img*' \
+        --exclude './vmlinuz*' \
+        . \
+        | tar x -f- -C "${rootfs_dir}"
+fi
+
+# because we're using the host kernel, we also have to use the host modules
+cp -r "/lib/modules/$(uname -r)" "${rootfs_dir}/lib/modules"
+
+# because nouveau will grab the graphics card if we don't prevent it
+cat >"${rootfs_dir}/etc/modprobe.d/nouveau.conf" <<EOF
+blacklist nouveau
+EOF
+
+# https://raymii.org/s/tutorials/Run_software_on_tty1_console_instead_of_login_getty.html
+# http://0pointer.de/blog/projects/serial-console.html
+readonly override_conf="/etc/systemd/system/serial-getty@ttyS0.service.d/override.conf"
+# readonly override_conf="/etc/systemd/system/getty@tty1.service.d/override.conf"
+
+info "installing fetty script"
+tee "${rootfs_dir}/root/fetty" <<EOF
+#!/bin/sh
+
+set -euvx
+
+this=\$(readlink -e \${0})
+here=\$(dirname \${this})
+
+echo "=== \${this} BEGIN ==="
+sleep 3
+
+# http://man7.org/linux/man-pages/man7/bootparam.7.html
+mount --no-mtab --option remount,rw /
+
+# https://superuser.com/questions/628169/how-to-share-a-directory-with-the-host-without-networking-in-qemu
+modprobe 9p
+mkdir -vp /mnt/my9p
+mount -t 9p -o trans=virtio,version=9p2000.L host0 /mnt/my9p
+
+mount
+sleep 3
+
+echo "=== THIS IS THE ACTION ==="
+ls -lah /mnt/my9p
+sleep 3
+
+# https://unix.stackexchange.com/questions/443017/can-i-make-qemu-exit-with-failure-on-kernel-panic
+modprobe pvpanic
+poweroff -f
+
+rm -vf ${override_conf}
+sleep 3
+systemctl daemon-reload
+sleep 3
+echo "=== \${this} END ==="
+sleep 999999
+EOF
+chmod +x "${rootfs_dir}/root/fetty"
+
+#     tee "${rootfs_dir}/${override_conf}" <<'EOF'
+# [Service]
+# Type=oneshot
+# Restart=no
+# ExecStart=
+# ExecStart=/root/fetty
+# StandardInput=tty
+# StandardOutput=tty
+# StandardError=tty
+# EOF
+
+readonly serial_getty_service="${rootfs_dir}/lib/systemd/system/serial-getty@.service"
+
+info "installing systemd getty override"
+mkdir -vp "$(dirname "${rootfs_dir}/${override_conf}")"
+
+tee "${rootfs_dir}/${override_conf}" <<EOF
+# ${override_conf}
+#
+# This file is a shameless rip of
+# lib/systemd/system/serial-getty@.service. This file is what systemd calls an
+# "override" --- it supersedes the similarly-named service that _would_ have
+# run if the override didn't exist.
+
+[Unit]
+Description=Serial Fetty on %I
+Documentation=man:agetty(8) man:systemd-getty-generator(8)
+Documentation=http://0pointer.de/blog/projects/serial-console.html
+BindsTo=dev-%i.device
+After=dev-%i.device systemd-user-sessions.service plymouth-quit-wait.service
+After=rc-local.service
+
+# If additional gettys are spawned during boot then we should make
+# sure that this is synchronized before getty.target, even though
+# getty.target didn't actually pull it in.
+Before=getty.target
+IgnoreOnIsolate=yes
+
+[Service]
+
+# ExecStart=-/sbin/agetty --keep-baud 115200,38400,9600 %I $TERM
+ExecStart=
+ExecStart=/root/fetty
+
+# Type=idle
+Type=onshot
+
+# Restart=always
+Restart=no
+
+UtmpIdentifier=%I
+TTYPath=/dev/%I
+TTYReset=yes
+TTYVHangup=yes
+KillMode=process
+IgnoreSIGPIPE=no
+SendSIGHUP=yes
+
+StandardInput=tty
+StandardOutput=tty
+StandardError=tty
+
+[Install]
+WantedBy=getty.target
+EOF
+
+readonly rootfs_tar="${rootfs_dir}.tar"
+if ! [ -f "${rootfs_tar}" ]; then
+    tar -cf "${rootfs_tar}" -C "${rootfs_dir}" .
+fi
+
+# creating a disk image from a tarball is more complicated than you think
+readonly rootfs_qcow2="${here}/rootfs.qcow2"
+if ! [ -f "${rootfs_qcow2}" ]; then
+    LIBGUESTFS_DEBUG=0 guestfish <<EOF
+disk-create "${rootfs_qcow2}" qcow2 "$((2 * $(stat -c%s "${rootfs_tar}")))"
+disk-format "${rootfs_qcow2}"
+disk-virtual-size "${rootfs_qcow2}"
+add-drive "${rootfs_qcow2}" readonly:false
+run
+list-devices
+part-disk /dev/sda gpt
+part-list /dev/sda
+mkfs ext4 /dev/sda
+list-filesystems
+mount /dev/sda /
+mounts
+ls /
+tar-in "${rootfs_tar}" /
+ls /
+umount-all
+exit
+EOF
+fi
+
+##############
+# ROOTFS END #
+##############
+
+readonly kernel="$(find /boot -maxdepth 1 -type f -name "vmlinuz-$(uname -r)")"
+if ! [ -n "${kernel}" ]; then
+    die "missing kernel"
+fi
+readonly initrd="$(find /boot -maxdepth 1 -type f -name "initrd.img-$(uname -r)")"
+if ! [ -n "${initrd}" ]; then
+    die "missing initrd"
+fi
+
+# > With the -snapshot flag, any changes made to the virtual machine while it
+# > is running are written to temporary files and thrown away when the virtual
+# > machine is turned off.
+#
+# https://wiki.qemu.org/Documentation/CreateSnapshot#Temporary_snapshots
+sudo "$(command -v qemu-system-x86_64)" \
+    -kernel "${kernel}" \
+    -initrd "${initrd}" \
+    -hda "${rootfs_qcow2}" \
+    -snapshot \
+    -append "root=/dev/sda console=ttyS0" \
+    -enable-kvm \
+    -serial stdio \
+    -machine q35 \
+    -m 1G \
+    -virtfs local,path="${here}",mount_tag=host0,security_model=passthrough,id=host0 \
+    -usb -device usb-host,hostbus="${realsense_bus}",hostaddr="${realsense_dev}" \
+    $(xargs <"${qemu_opts}")
+
+exit "$?"
