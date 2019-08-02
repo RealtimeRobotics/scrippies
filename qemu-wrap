@@ -89,7 +89,7 @@ export LC_ALL=C
 
 readonly executable_list="$(mktemp -t executable_list.XXXXXX)"
 
-while getopts ":hIC::" opt; do
+while getopts ":hI:C:" opt; do
     case "${opt}" in
         h)
             usage
@@ -124,6 +124,14 @@ if [ -n "${workdir:-}" ]; then
 else
     readonly workdir="${PWD}"
     warning "defaulting workdir: ${workdir}"
+fi
+
+# image_name
+if [ -n "${image_name:-}" ]; then
+    info "image_name: ${image_name}"
+else
+    readonly image_name="${default_image_name}"
+    warning "defaulting image_name: ${image_name}"
 fi
 
 ################################################################################
@@ -274,7 +282,6 @@ if ! command -v guestfish >/dev/null 2>&1; then
     die "missing command: guestfish"
 fi
 
-readonly image_name="registry.gitlab.com/realtime-robotics/ros-dpkg:${ros_distro}"
 readonly rootfs_dir="${here}/rootfs"
 if ! [ -d "${rootfs_dir}" ]; then
     mkdir -vp "${rootfs_dir}"
@@ -291,9 +298,12 @@ if ! [ -d "${rootfs_dir}" ]; then
 fi
 
 # because we're using the host kernel, we also have to use the host modules
+info "installing kernel modules from host into guest"
+mkdir -vp "${rootfs_dir}/lib/modules"
 cp -r "/lib/modules/$(uname -r)" "${rootfs_dir}/lib/modules"
 
 # because nouveau will grab the graphics card if we don't prevent it
+mkdir -vp "$(dirname "${rootfs_dir}/etc/modprobe.d/nouveau.conf")"
 cat >"${rootfs_dir}/etc/modprobe.d/nouveau.conf" <<EOF
 blacklist nouveau
 EOF
