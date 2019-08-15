@@ -572,8 +572,6 @@ if ! is_in_container; then
            "${image_name}" sh <<'EOF'
 set -euvx
 
-sh -c "${ROOT_SCRIPT}"
-
 # maybe someday:
 #dpkg-divert --local --rename /bin/bash
 
@@ -582,6 +580,8 @@ dpkg-divert --local --rename /usr/bin/git
 # configure apt
 ${THIS} -D ${DISTRIBUTION} -a
 apt-get -y update
+
+sh -c "${ROOT_SCRIPT}"
 
 groupadd -g "${DOCKER_HOST_GID}" luser
 useradd \
