@@ -614,6 +614,18 @@ rm -vf /etc/sudoers.d/luser-apt-get
 apt-get -y purge sudo
 apt-get -y autoremove
 
+
+pclros_config_cmake="/opt/ros/${ROS_DISTRO}/share/pcl_ros/cmake/pcl_rosConfig.cmake"
+if [ -f "${pclros_config_cmake}" ]; then
+    sed -r \
+        -i.backup \
+        -e 's,;/usr/include/vtk[[:alnum:].-]+,,g' \
+        -e 's,;/usr/lib(/x86_64-linux-gnu)?/libvtk[[:alnum:].-]+,,g' \
+        "${pclros_config_cmake}"
+fi
+
+! diff "${pclros_config_cmake}.backup" "${pclros_config_cmake}"
+
 nice -n19 su luser <<'SU_LUSER'
 set -euvx
 ${THIS} -C ${COPY_CATKIN_WS} -D ${DISTRIBUTION} -R ${ROS_DISTRO}
