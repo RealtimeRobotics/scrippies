@@ -160,8 +160,6 @@ EOF
     fi
     find "$(etc_apt_sources_list_d)" -type f -name '*.list' -exec mv -v {} {}.backup \;
 
-    # if [ "true" = "${install_keys:-false}" ]; then
-
     # The following heredoc is an ASCII-armored gpg pubkey from ROS. It's used
     # to verify the debian packages therefrom. It was acquired like this:
     #
