@@ -35,31 +35,16 @@ Notes:
     DISTRIBUTION defaults to \$(lsb_release --short --codename).
 
 Options:
-    -h    print usage and exit
-    -A    install everything (this is the default)
-    -K    install public keys only
-    -L    install apt sources list files only
-    -I    use intranet mirrors (implies -X)
-    -X    "excise" first (backup and remove /etc/apt/sources.list)
-    -Z    "zap" first (backup and remove every /etc/apt/sources.list.d/*.list)
+    -h            print usage and exit
+    -f NETWORK    force NETWORK={private,public} (default is to discover)
 
 Examples:
 
-    # discover distribution, install everything:
     \$ $0
-    \$ $0 -A
 
-    # discover distribution, install public keys only
-    \$ $0 -K
+    \$ $0 -f private
 
-    # discover distribution, install apt sources list files only
-    \$ $0 -L
-
-    # discover distribution, install everything, use intranet mirrors
-    \$ $0 -I
-    \$ $0 -IX
-    \$ $0 -AI
-    \$ $0 -AIX
+    \$ $0 -f public
 
     \$ $0 trusty
 
@@ -126,121 +111,118 @@ read_into_generated() {
     read_into_listfile "$(etc_apt_sources_list_d)/$(filenamify "$1").list"
 }
 
-################################################################################
+apt_config_path() {
+    cut -d= -f2 | xargs -n1 | paste -sd/ | xargs readlink -f
+}
 
-trap cleanup EXIT
-export TMPDIR="${tmpdir}"
-export LC_ALL=C
+etc_apt_sources_list() {
+    apt-config shell _ Dir _ Dir::Etc _ Dir::Etc::sourcelist | apt_config_path
+}
 
-while getopts ":hAKLIXZ" opt; do
-    case "${opt}" in
-        h)
-            usage
-            exit 0
-            ;;
-        A)
-            install_keys="true"
-            install_lists="true"
-            ;;
-        K) install_keys="true" ;;
-        L) install_lists="true" ;;
-        I)
-            use_intranet="true"
-            excise="true"
-            ;;
-        X) excise="true" ;;
-        Z) zap="true" ;;
-        :) die "missing argument: -${OPTARG}" ;;
-        \?) die "bad option: -${OPTARG}" ;;
+etc_apt_sources_list_d() {
+    apt-config shell _ Dir _ Dir::Etc _ Dir::Etc::sourceparts | apt_config_path
+}
+
+etc_apt_apt_conf_d() {
+    apt-config shell _ Dir _ Dir::Etc _ Dir::Etc::parts | apt_config_path
+}
+
+# read stdin (assumed to be apt sources list file body) into the given apt
+# sources list file
+#
+# $1 : listfile to be written
+read_into_listfile() {
+    info "installing: $1"
+    if [ -f "$1" ]; then
+        warning "file exists: $1"
+        warning "$(mv -v $1 $1.backup)"
+    fi
+    cat >"$1" <<EOF
+# $1
+#
+# This is a generated apt sources list file.
+#
+# https://wiki.debian.org/SourcesList
+#
+# generator : ${this}
+# user      : $(id)
+# uname     : $(uname -a)
+# date      : $(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
+EOF
+    cat >>"$1"
+}
+
+# 3.282 Portable Filename Character Set
+# https://pubs.opengroup.org/onlinepubs/9699919799/basedefs/V1_chap03.html#tag_03_282
+filenamify() {
+    printf "$@" | tr -sc '[:alnum:]._-' '_'
+}
+
+# read stdin (assumed to be apt sources list file body) into a generated apt
+# sources list file named for the given url
+#
+# $1 : url from which to generate apt sources list file name
+read_into_generated() {
+    read_into_listfile "$(etc_apt_sources_list_d)/$(filenamify "$1").list"
+}
+
+is_private() {
+    case "${force_network:-}" in
+        private)
+            return 0 ;;
+        public)
+            return 1 ;;
+        *) ;;
     esac
-done
-shift "$((${OPTIND} - 1))"
+    curl -Is apt.realtime.cxm
+}
 
-# http://archive.ubuntu.com/ubuntu/dists/bionic/main/
-readonly ubuntu_arch_list="$(mktemp -t ubuntu_arch_list.XXXXXX)"
-cat >"${ubuntu_arch_list}" <<'EOF'
+configure_apt() {
+    # http://archive.ubuntu.com/ubuntu/dists/bionic/main/
+    local ubuntu_arch_list="$(mktemp -t ubuntu_arch_list.XXXXXX)"
+    cat >"${ubuntu_arch_list}" <<'EOF'
 amd64
 i386
 EOF
 
-# http://ports.ubuntu.com/ubuntu-ports/dists/bionic/main/
-readonly ubuntu_ports_arch_list="$(mktemp -t ubuntu_ports_arch_list.XXXXXX)"
-cat >"${ubuntu_ports_arch_list}" <<'EOF'
+    # http://ports.ubuntu.com/ubuntu-ports/dists/bionic/main/
+    local ubuntu_ports_arch_list="$(mktemp -t ubuntu_ports_arch_list.XXXXXX)"
+    cat >"${ubuntu_ports_arch_list}" <<'EOF'
 arm64
 armhf
 ppc64el
 s390x
 EOF
 
-# http://packages.ros.org/ros/ubuntu/dists/bionic/main/
-readonly ros_arch_list="$(mktemp -t ros_arch_list.XXXXXX)"
-cat >"${ros_arch_list}" <<'EOF'
+    # http://packages.ros.org/ros/ubuntu/dists/bionic/main/
+    local ros_arch_list="$(mktemp -t ros_arch_list.XXXXXX)"
+    cat >"${ros_arch_list}" <<'EOF'
 amd64
 arm64
 armhf
 i386
 EOF
 
-readonly this_arch="$(dpkg --print-architecture)"
-
-if ! grep -q "${this_arch}" "${ubuntu_arch_list}" "${ubuntu_ports_arch_list}"; then
-    die "unsupported architecture: ${this_arch}"
-fi
-
-if ! grep -q "${this_arch}" "${ros_arch_list}"; then
-    die "unsupported architecture: ${this_arch}"
-fi
-
-case "$#" in
-    0)
-        warning "missing distribution; will attempt to discover"
-        if ! command -v lsb_release >/dev/null 2>&1; then
-            die "missing program: lsb_release"
-        fi
-        if ! distribution="$(lsb_release --short --codename)"; then
-            die "failure: lsb_release --short --codename"
-        fi
-        readonly distribution="${distribution}"
-        info "discovered distribution: ${distribution}"
-        ;;
-    1)
-        readonly distribution="$1"
-        ;;
-    *)
-        die "bad args"
-        ;;
-esac
-
-if [ "true" = "${install_keys:-false}" ]; then
-    info "will install keys"
-elif [ "true" = "${install_lists:-false}" ]; then
-    info "will install lists"
-else
-    install_keys="true"
-    install_lists="true"
-    info "will install keys"
-    info "will install lists"
-fi
-
-if [ "true" = "${excise:-false}" ]; then
-    if [ -f "$(etc_apt_sources_list)" ]; then
-        mv -v "$(etc_apt_sources_list)" "$(etc_apt_sources_list).backup"
+    local this_arch="$(dpkg --print-architecture)"
+    if ! grep -q "${this_arch}" "${ubuntu_arch_list}" "${ubuntu_ports_arch_list}"; then
+        die "unsupported architecture: ${this_arch}"
     fi
-fi
+    if ! grep -q "${this_arch}" "${ros_arch_list}"; then
+        die "unsupported architecture: ${this_arch}"
+    fi
 
-if [ "true" = "${zap:-false}" ]; then
-    find "$(etc_apt_sources_list_d)" -type f -name '*.list' -exec mv -v {} {}.backup \;
-fi
-
-if [ "true" = "${install_keys:-false}" ]; then
     if ! command -v gpg >/dev/null 2>&1; then
-        die "missing program: gpg"
+        die "missing command: gpg"
     fi
     info "gpg path: $(command -v gpg)"
     info "gpg version: $(gpg --version)"
-fi
 
-if [ "true" = "${install_keys:-false}" ]; then
+    if [ -f "$(etc_apt_sources_list)" ]; then
+        mv -v "$(etc_apt_sources_list)" "$(etc_apt_sources_list).backup"
+    fi
+    find "$(etc_apt_sources_list_d)" -type f -name '*.list' -exec mv -v {} {}.backup \;
+
     # The following heredoc is an ASCII-armored gpg pubkey from ROS. It's used
     # to verify the debian packages therefrom. It was acquired like this:
     #
@@ -335,43 +317,35 @@ mhqidES4MwCggqQyo+w1Twx6DKLF+3rF5nf1F3Q=
 =2m5N
 -----END PGP PUBLIC KEY BLOCK-----
 EOF
-fi
 
-if [ "true" = "${install_lists:-false}" ]; then
-    # ros
-    if [ "true" = "${use_intranet:-false}" ]; then
-        readonly ros_url="http://apt.realtime.cxm/apt/ros/${distribution}"
+    # https://serverfault.com/questions/13780/how-can-i-determine-if-a-machine-is-online-without-using-ping/923193#923193
+    # https://unix.stackexchange.com/questions/148985/how-to-get-a-response-from-any-url/148989#148989
+    if is_private; then
+        info "found intranet host: apt.realtime.cxm"
+        local ros_url="http://apt.realtime.cxm/apt/ros/${distribution}"
+        if grep "${this_arch}" "${ubuntu_ports_arch_list}"; then
+            local ubuntu_url="http://apt.realtime.cxm/apt/ubuntu-ports/${distribution}"
+        else
+            local ubuntu_url="http://apt.realtime.cxm/apt/ubuntu/${distribution}"
+        fi
     else
-        readonly ros_url="http://packages.ros.org/ros/ubuntu"
+        warning "missing intranet host: apt.realtime.cxm"
+        local ros_url="http://packages.ros.org/ros/ubuntu"
+        if grep "${this_arch}" "${ubuntu_ports_arch_list}"; then
+            local ubuntu_url="http://ports.ubuntu.com/ubuntu-ports"
+        else
+            local ubuntu_url="http://archive.ubuntu.com/ubuntu"
+        fi
     fi
+
     info "ros_url: ${ros_url}"
     read_into_generated "${ros_url}" <<EOF
 deb     ${ros_url} ${distribution} main
 deb-src ${ros_url} ${distribution} main
 EOF
 
-    # ubuntu
-    if [ "true" = "${use_intranet:-false}" ]; then
-        if grep "${this_arch}" "${ubuntu_ports_arch_list}"; then
-            readonly ubuntu_url="http://apt.realtime.cxm/apt/ubuntu-ports/${distribution}"
-        else
-            readonly ubuntu_url="http://apt.realtime.cxm/apt/ubuntu/${distribution}"
-        fi
-    else
-        if grep "${this_arch}" "${ubuntu_ports_arch_list}"; then
-            readonly ubuntu_url="http://ports.ubuntu.com/ubuntu-ports"
-        else
-            readonly ubuntu_url="http://archive.ubuntu.com/ubuntu"
-        fi
-    fi
     info "ubuntu_url: ${ubuntu_url}"
-
-    # /etc/apt/sources.list XOR /etc/apt/sources.list.d/ubuntu.list
-    if [ -f "$(etc_apt_sources_list)" ]; then
-        warning "file exists: $(etc_apt_sources_list)"
-        warning "skipping install: ${ubuntu_url}"
-    else
-        read_into_generated "${ubuntu_url}" <<EOF
+    read_into_generated "${ubuntu_url}" <<EOF
 deb     ${ubuntu_url} ${distribution} main restricted universe multiverse
 deb     ${ubuntu_url} ${distribution}-backports main restricted universe multiverse
 deb     ${ubuntu_url} ${distribution}-security main restricted universe multiverse
@@ -388,19 +362,59 @@ deb     ${ubuntu_url} ${distribution} main/debian-installer restricted/debian-in
 #deb     ${ubuntu_url} ${distribution}-updates main/debian-installer restricted/debian-installer universe/debian-installer multiverse/debian-installer
 
 EOF
-    fi
-fi
 
-# proactive protection against a bad proxy
-#
-# * https://askubuntu.com/questions/679233/failed-to-fetch-hash-sum-mismatch-tried-rm-apt-list-but-didnt-work
-# * https://serverfault.com/questions/722893/debian-mirror-hash-sum-mismatch
-# * https://gist.github.com/trastle/5722089
-info "install $(etc_apt_apt_conf_d)/99fixbadproxy"
-cat >"$(etc_apt_apt_conf_d)/99fixbadproxy" <<FIXBADPROXY
+    # proactive protection against a bad proxy
+    #
+    # * https://askubuntu.com/questions/679233/failed-to-fetch-hash-sum-mismatch-tried-rm-apt-list-but-didnt-work
+    # * https://serverfault.com/questions/722893/debian-mirror-hash-sum-mismatch
+    # * https://gist.github.com/trastle/5722089
+    info "install $(etc_apt_apt_conf_d)/99fixbadproxy"
+    cat >"$(etc_apt_apt_conf_d)/99fixbadproxy" <<FIXBADPROXY
 Acquire::http::Pipeline-Depth "0";
 Acquire::http::No-Cache=True;
 Acquire::BrokenProxy=true;
 FIXBADPROXY
+}
+
+################################################################################
+
+trap cleanup EXIT
+export TMPDIR="${tmpdir}"
+export LC_ALL=C
+
+while getopts ":hf:" opt; do
+    case "${opt}" in
+        h)
+            usage
+            exit 0
+            ;;
+        f) readonly force_network="${OPTARG}" ;;
+        :) die "missing argument: -${OPTARG}" ;;
+        \?) die "bad option: -${OPTARG}" ;;
+    esac
+done
+shift "$((${OPTIND} - 1))"
+
+case "$#" in
+    0)
+        warning "missing distribution; will attempt to discover"
+        if ! command -v lsb_release >/dev/null 2>&1; then
+            die "missing program: lsb_release"
+        fi
+        if ! distribution="$(lsb_release --short --codename)"; then
+            die "failure: lsb_release --short --codename"
+        fi
+        readonly distribution="${distribution}"
+        info "discovered distribution: ${distribution}"
+        ;;
+    1)
+        readonly distribution="$1"
+        ;;
+    *)
+        die "bad args"
+        ;;
+esac
+
+configure_apt
 
 exit "$?"
