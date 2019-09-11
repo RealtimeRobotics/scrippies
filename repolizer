@@ -350,140 +350,9 @@ ctrlval_clean() {
         | sort -u
 }
 
-run_raw() {
-    info "creating fake apt configuration"
-    enfake_apt "$(mktemp -dt fake_apt_dir.XXXXXX)"
-
-    # create/update fake apt repo in workdir; we don't care when the following
-    # happens:
-    #
-    #     rm: cannot remove '/var/cache/apt/archives/partial/*.deb': Permission denied
-    info "repolizing ${apt_repo_dir}"
-    apt_repolize "${apt_repo_dir}"
-
-    info "repolizing ${workdir}"
-    apt_repolize "${workdir}"
-
-    # enumerate package edges; for each edge, the terminating node is the name
-    # of a dependency; download every dependency
-    info "enumerating package edges"
-    local package_edges="$(mktemp -t package_edges.XXXXXX)"
-    packages2edges "${workdir}/Packages" >"${package_edges}"
-
-    info "enumerating package depends"
-    local package_depends="$(mktemp -t package_depends.XXXXXX)"
-    cut -f2 <"${package_edges}" >"${package_depends}"
-    sort -uo "${package_depends}" "${package_depends}"
-
-    info "enumerating package extants"
-    local package_extants="$(mktemp -t package_extants.XXXXXX)"
-    find "${workdir}" -type f -name '*.deb' \
-        -exec dpkg-deb --show --showformat='${Package}\n' {} \; \
-        >"${package_extants}"
-    sort -uo "${package_extants}" "${package_extants}"
-
-    info "enumerating package downloads"
-    local package_downloads="$(mktemp -t package_downloads.XXXXXX)"
-    comm -23 "${package_depends}" "${package_extants}" >"${package_downloads}"
-
-    info "downloading packages"
-    mkdir -vp "${workdir}/depends"
-    (
-        cd "${workdir}/depends"
-        xargs -r apt-get download <"${package_downloads}"
-    )
-    info "re-repolizing ${workdir}"
-    apt_repolize "${workdir}"
-
-    info "done"
-    return "$?"
-
-    info "generating install list"
-    if false; then
-        # generate the list of all packages
-        local packages_all="$(mktemp -t packages_all.XXXXXX)"
-        packages2names "${workdir}/Packages" >"${packages_all}"
-        sort -uo "${packages_all}" "${packages_all}"
-
-        # after (possibly) installing new dependencies, re-enumerate package edges
-        packages2edges "${workdir}/Packages" >"${package_edges}"
-
-        # generate the list of "strongly connected component" packages
-        local packages_scc="$(mktemp -t packages_scc.XXXXXX)"
-        kosaraju_scc "${package_edges}" >"${packages_scc}"
-        sort -uo "${packages_scc}" "${packages_scc}"
-
-        # set-subtract from all packages the scc packages to give "weakly connected
-        # component" packages; i.e., the list of packages to install
-        comm -23 "${packages_all}" "${packages_scc}" >"${workdir}/install-list.txt"
-    else
-        find "${workdir}" -maxdepth 1 -type f -name '*.deb' \
-            -exec dpkg-deb --field {} 'Package' \; \
-            | sort -u >"${workdir}/install-list.txt"
-    fi
-}
-
-run_dockerized() {
-    readonly image_name="ubuntu:${distribution}"
-    if [ "true" = "${DOCKER_IMAGE_PULL:-false}" ]; then
-        docker image pull "${image_name}"
-    else
-        warning "skipping: docker image pull ${image_name}"
-    fi
-
-    docker container run \
-        --env APT_REPO_DIR="${apt_repo_dir}" \
-        --env CONFIGURE_APT_OPTS="${CONFIGURE_APT_OPTS:-}" \
-        --env DEBCONF_NONINTERACTIVE_SEEN=true \
-        --env DEBIAN_FRONTEND=noninteractive \
-        --env DISTRIBUTION="${distribution}" \
-        --env DOCKER_HOST_GID="$(id -g)" \
-        --env DOCKER_HOST_UID="$(id -u)" \
-        --env HERE="${here}" \
-        --env THIS="${this}" \
-        --env WORKDIR="${workdir}" \
-        --interactive \
-        --mount type=bind,readonly,source="${here}/configure-apt",target="${here}/configure-apt" \
-        --mount type=bind,readonly,source="${this}",target="${this}" \
-        --mount type=bind,source="${apt_repo_dir}",target="${apt_repo_dir}" \
-        --mount type=bind,source="${workdir}",target="${workdir}" \
-        --rm \
-        --workdir "${workdir}" \
-        "${image_name}" sh <<'EOF'
-set -euvx
-
-# proactive protection against a bad proxy
-#
-# * https://askubuntu.com/questions/679233/failed-to-fetch-hash-sum-mismatch-tried-rm-apt-list-but-didnt-work
-# * https://serverfault.com/questions/722893/debian-mirror-hash-sum-mismatch
-# * https://gist.github.com/trastle/5722089
-cat >/etc/apt/apt.conf.d/99fixbadproxy <<FIXBADPROXY
-Acquire::http::Pipeline-Depth "0";
-Acquire::http::No-Cache=True;
-Acquire::BrokenProxy=true;
-FIXBADPROXY
-
-if ! command -v gpg >/dev/null 2>&1; then
-    apt-get -y update
-    apt-get -y --no-install-recommends install gnupg
-fi
-
-find /var/lib/apt/lists -type f -print -delete
-${HERE}/configure-apt ${CONFIGURE_APT_OPTS} ${DISTRIBUTION}
-apt-get -y update
-apt-get -y --no-install-recommends install dpkg-dev
-
-groupadd -g "${DOCKER_HOST_GID}" luser
-useradd \
-    -u "${DOCKER_HOST_UID}" \
-    -g "${DOCKER_HOST_GID}" \
-    -d "$(mktemp -ut home_luser.XXXXXX)" \
-    -s "$(command -v sh)" \
-    luser
-
-nice -n19 su -c "${THIS} -r -C ${WORKDIR} -a ${APT_REPO_DIR} -D ${DISTRIBUTION}" luser
-EOF
-}
+# https://stackoverflow.com/questions/23513045/how-to-check-if-a-process-is-running-inside-docker-container
+# https://stackoverflow.com/questions/20010199/how-to-determine-if-a-process-runs-inside-lxc-docker
+is_in_container() { grep -q 'lxc\|docker' /proc/1/cgroup; }
 
 ################################################################################
 
@@ -491,13 +360,12 @@ trap cleanup EXIT
 export TMPDIR="${tmpdir}"
 export LC_ALL=C
 
-while getopts ":hrC:a:D:" opt; do
+while getopts ":hC:a:D:" opt; do
     case "${opt}" in
         h)
             usage
             exit 0
             ;;
-        r) readonly run_raw="true" ;;
         C)
             if ! workdir="$(readlink -f "${OPTARG}")"; then
                 die "missing: ${OPTARG}"
@@ -544,10 +412,133 @@ else
     warning "defaulting distribution: ${distribution}"
 fi
 
-if [ "true" = "${run_raw:-false}" ]; then
-    run_raw
+if ! is_in_container; then
+    readonly image_name="ubuntu:${distribution}"
+    if [ "true" = "${DOCKER_IMAGE_PULL:-false}" ]; then
+        docker image pull "${image_name}"
+    else
+        warning "skipping: docker image pull ${image_name}"
+    fi
+
+    docker container run \
+        --env APT_REPO_DIR="${apt_repo_dir}" \
+        --env CONFIGURE_APT_OPTS="${CONFIGURE_APT_OPTS:-}" \
+        --env DEBCONF_NONINTERACTIVE_SEEN=true \
+        --env DEBIAN_FRONTEND=noninteractive \
+        --env DISTRIBUTION="${distribution}" \
+        --env DOCKER_HOST_GID="$(id -g)" \
+        --env DOCKER_HOST_UID="$(id -u)" \
+        --env HERE="${here}" \
+        --env THIS="${this}" \
+        --env WORKDIR="${workdir}" \
+        --interactive \
+        --mount type=bind,readonly,source="${here}/configure-apt",target="${here}/configure-apt" \
+        --mount type=bind,readonly,source="${this}",target="${this}" \
+        --mount type=bind,source="${apt_repo_dir}",target="${apt_repo_dir}" \
+        --mount type=bind,source="${workdir}",target="${workdir}" \
+        --rm \
+        --workdir "${workdir}" \
+        "${image_name}" sh <<'EOF'
+set -euvx
+
+if ! command -v gpg >/dev/null 2>&1; then
+    apt-get -y update
+    apt-get -y --no-install-recommends install gnupg
+fi
+
+if ! command -v curl >/dev/null 2>&1; then
+    apt-get -y update
+    apt-get -y --no-install-recommends install curl
+fi
+
+rm -vf /etc/apt/sources.list
+find /etc/apt/sources.list.d /var/lib/apt/lists -type f -print -delete
+${HERE}/configure-apt ${CONFIGURE_APT_OPTS} ${DISTRIBUTION}
+apt-get -y update
+apt-get -y --no-install-recommends install dpkg-dev
+
+groupadd -g "${DOCKER_HOST_GID}" luser
+useradd \
+    -u "${DOCKER_HOST_UID}" \
+    -g "${DOCKER_HOST_GID}" \
+    -d "$(mktemp -ut home_luser.XXXXXX)" \
+    -s "$(command -v sh)" \
+    luser
+
+nice -n19 su -c "${THIS} -C ${WORKDIR} -a ${APT_REPO_DIR} -D ${DISTRIBUTION}" luser
+EOF
+    exit "$?"
+fi
+
+info "creating fake apt configuration"
+enfake_apt "$(mktemp -dt fake_apt_dir.XXXXXX)"
+
+# create/update fake apt repo in workdir; we don't care when the following
+# happens:
+#
+#     rm: cannot remove '/var/cache/apt/archives/partial/*.deb': Permission denied
+info "repolizing ${apt_repo_dir}"
+apt_repolize "${apt_repo_dir}"
+
+info "repolizing ${workdir}"
+apt_repolize "${workdir}"
+
+# enumerate package edges; for each edge, the terminating node is the name
+# of a dependency; download every dependency
+info "enumerating package edges"
+readonly package_edges="$(mktemp -t package_edges.XXXXXX)"
+packages2edges "${workdir}/Packages" >"${package_edges}"
+
+info "enumerating package depends"
+readonly package_depends="$(mktemp -t package_depends.XXXXXX)"
+cut -f2 <"${package_edges}" >"${package_depends}"
+sort -uo "${package_depends}" "${package_depends}"
+
+info "enumerating package extants"
+readonly package_extants="$(mktemp -t package_extants.XXXXXX)"
+find "${workdir}" -type f -name '*.deb' \
+     -exec dpkg-deb --show --showformat='${Package}\n' {} \; \
+     >"${package_extants}"
+sort -uo "${package_extants}" "${package_extants}"
+
+info "enumerating package downloads"
+readonly package_downloads="$(mktemp -t package_downloads.XXXXXX)"
+comm -23 "${package_depends}" "${package_extants}" >"${package_downloads}"
+
+info "downloading packages"
+mkdir -vp "${workdir}/depends"
+(
+    cd "${workdir}/depends"
+    xargs -r apt-get download <"${package_downloads}"
+)
+info "re-repolizing ${workdir}"
+apt_repolize "${workdir}"
+
+info "done"
+exit "$?"
+
+info "generating install list"
+if false; then
+    # generate the list of all packages
+    readonly packages_all="$(mktemp -t packages_all.XXXXXX)"
+    packages2names "${workdir}/Packages" >"${packages_all}"
+    sort -uo "${packages_all}" "${packages_all}"
+
+    # after (possibly) installing new dependencies, re-enumerate package edges
+    packages2edges "${workdir}/Packages" >"${package_edges}"
+
+    # generate the list of "strongly connected component" packages
+    readonly packages_scc="$(mktemp -t packages_scc.XXXXXX)"
+    kosaraju_scc "${package_edges}" >"${packages_scc}"
+    sort -uo "${packages_scc}" "${packages_scc}"
+
+    # set-subtract from all packages the scc packages to give "weakly connected
+    # component" packages; i.e., the list of packages to install
+    comm -23 "${packages_all}" "${packages_scc}" >"${workdir}/install-list.txt"
 else
-    run_dockerized
+    find "${workdir}" -maxdepth 1 -type f -name '*.deb' \
+         -exec dpkg-deb --field {} 'Package' \; \
+        | sort -u >"${workdir}/install-list.txt"
 fi
 
 exit "$?"
