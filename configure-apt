@@ -175,7 +175,7 @@ is_private() {
             return 1 ;;
         *) ;;
     esac
-    curl -Is apt.realtime.cxm
+    getent hosts apt.realtime.cxm
 }
 
 configure_apt() {
