@@ -454,9 +454,9 @@ apt-get -y --no-install-recommends install dpkg-dev
 
 groupadd -g "${DOCKER_HOST_GID}" luser
 useradd \
+    -m \
     -u "${DOCKER_HOST_UID}" \
     -g "${DOCKER_HOST_GID}" \
-    -d "$(mktemp -ut home_luser.XXXXXX)" \
     -s "$(command -v sh)" \
     luser
 
