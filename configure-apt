@@ -376,6 +376,27 @@ Acquire::BrokenProxy=true;
 FIXBADPROXY
 }
 
+detect_distribution() {
+    if command -v lsb_release >/dev/null 2>&1; then
+        lsb_release --short --codename
+        return 0
+    else
+        warning "missing program: lsb_release"
+    fi
+    if [ -f /etc/os-release ]; then
+        . /etc/os-release
+        if [ -n "${UBUNTU_CODENAME:-}" ]; then
+            echo "${UBUNTU_CODENAME}"
+            return 0
+        else
+            warning "/etc/os-release: undefined UBUNTU_CODENAME"
+        fi
+    else
+        warning "missing file: /etc/os-release"
+    fi
+    return 1
+}
+
 ################################################################################
 
 trap cleanup EXIT
@@ -398,14 +419,11 @@ shift "$((${OPTIND} - 1))"
 case "$#" in
     0)
         warning "missing distribution; will attempt to discover"
-        if ! command -v lsb_release >/dev/null 2>&1; then
-            die "missing program: lsb_release"
-        fi
-        if ! distribution="$(lsb_release --short --codename)"; then
-            die "failure: lsb_release --short --codename"
+        if ! distribution="$(detect_distribution)"; then
+            die "FAILURE: detect_distribution"
         fi
         readonly distribution="${distribution}"
-        info "discovered distribution: ${distribution}"
+        info "detected distribution: ${distribution}"
         ;;
     1)
         readonly distribution="$1"
