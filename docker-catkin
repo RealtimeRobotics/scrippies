@@ -255,10 +255,9 @@ mhqidES4MwCggqQyo+w1Twx6DKLF+3rF5nf1F3Q=
 -----END PGP PUBLIC KEY BLOCK-----
 EOF
 
-    # https://serverfault.com/questions/13780/how-can-i-determine-if-a-machine-is-online-without-using-ping/923193#923193
-    # https://unix.stackexchange.com/questions/148985/how-to-get-a-response-from-any-url/148989#148989
-    if curl -Is apt.realtime.cxm; then
-        info "found intranet host: apt.realtime.cxm"
+    # https://unix.stackexchange.com/questions/20784/how-can-i-resolve-a-hostname-to-an-ip-address-in-a-bash-script
+    if getent hosts apt.realtime.cxm; then
+        info "SUCCESS: getent hosts apt.realtime.cxm"
         local ros_url="http://apt.realtime.cxm/apt/ros/${distribution}"
         if grep "${this_arch}" "${ubuntu_ports_arch_list}"; then
             local ubuntu_url="http://apt.realtime.cxm/apt/ubuntu-ports/${distribution}"
@@ -266,7 +265,7 @@ EOF
             local ubuntu_url="http://apt.realtime.cxm/apt/ubuntu/${distribution}"
         fi
     else
-        warning "missing intranet host: apt.realtime.cxm"
+        warning "FAILURE: getent hosts apt.realtime.cxm"
         local ros_url="http://packages.ros.org/ros/ubuntu"
         if grep "${this_arch}" "${ubuntu_ports_arch_list}"; then
             local ubuntu_url="http://ports.ubuntu.com/ubuntu-ports"
