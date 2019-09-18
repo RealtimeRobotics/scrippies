@@ -446,11 +446,6 @@ if ! command -v gpg >/dev/null 2>&1; then
     apt-get -y --no-install-recommends install gnupg
 fi
 
-if ! command -v curl >/dev/null 2>&1; then
-    apt-get -y update
-    apt-get -y --no-install-recommends install curl
-fi
-
 rm -vf /etc/apt/sources.list
 find /etc/apt/sources.list.d /var/lib/apt/lists -type f -print -delete
 ${HERE}/configure-apt ${CONFIGURE_APT_OPTS} ${DISTRIBUTION}
