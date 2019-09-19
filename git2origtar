@@ -28,7 +28,7 @@ cleanup() {
 
 usage() {
     cat <<EOF
-Usage: $(basename ${this}) [OPTION]...
+Usage: $0 [OPTION]...
 From a git checkout, create an orig tarball and print its path.
 
 Options
