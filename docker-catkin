@@ -41,6 +41,7 @@ Dockerize catkin build, catkin run_tests, and catkin_test_results.
 Options:
 
     -h                 print usage and exit
+    -a                 configure apt (options following this are ignored)
     -s ROOT_SCRIPT     execute ROOT_SCRIPT before doing anything else
     -C CATKIN_WS       run as if started in CATKIN_WS (default: \$PWD)
     -D DISTRIBUTION    ubuntu distribution (default: ${default_distribution})
@@ -397,6 +398,28 @@ dircopy() {
     ttcopy "$1" "${2:-${PWD}}"
 }
 
+
+# takes a source directory and a target directory; operates on the catkin
+# workspace currently residing at target directory; mutates files therein to
+# change source references to target references.
+#
+# $1 : source directory
+# $2 : target directory
+catkin_ws_pathfix() {
+    local source_dir="$1"
+    local target_dir="$2"
+    find \
+        "${target_dir}/.catkin_tools" \
+        "${target_dir}/build" \
+        "${target_dir}/devel" \
+        "${target_dir}/install" \
+        "${target_dir}/logs" \
+        -type f \
+        -exec grep -qI "${source_dir}" {} + \
+        -exec sed -i "s|${source_dir}|${target_dir}|g" {} + \
+        || true
+}
+
 # https://stackoverflow.com/questions/23513045/how-to-check-if-a-process-is-running-inside-docker-container
 # https://stackoverflow.com/questions/20010199/how-to-determine-if-a-process-runs-inside-lxc-docker
 is_in_container() { grep -q 'lxc\|docker' /proc/1/cgroup; }
@@ -608,8 +631,13 @@ SU_LUSER
 
 # STUPID ROS: now de-sudo luser and uninstall sudo
 rm -vf /etc/sudoers.d/luser-apt-get
-apt-get -y purge sudo
-apt-get -y autoremove
+
+# STUPID ROS: this used to be okay, then something with catkin happened
+# -- neil 2019.10.28
+if false; then
+    apt-get -y purge sudo
+    apt-get -y autoremove
+fi
 
 # because pcl_ros has too many shared objects
 pclros_config_cmake="/opt/ros/${ROS_DISTRO}/share/pcl_ros/cmake/pcl_rosConfig.cmake"
@@ -628,18 +656,25 @@ ${THIS} -C ${COPY_CATKIN_WS} -D ${DISTRIBUTION} -R ${ROS_DISTRO}
 SU_LUSER
 
 EOF
+
+    # hold off on this for now
+    if false; then
+        catkin_ws_pathfix "${docker_workdir}" "${PWD}"
+    fi
+
     exit "$?"
 fi
 
 env | sort
-catkin config --install --workspace "${copy_catkin_ws}" --extend "/opt/ros/${ros_distro}"
+catkin init --workspace "${copy_catkin_ws}"
+catkin config --workspace "${copy_catkin_ws}" --extend "/opt/ros/${ros_distro}" --install
 catkin clean --workspace "${copy_catkin_ws}" --yes
 catkin_verb build --workspace "${copy_catkin_ws}"
 catkin_verb run_tests --workspace "${copy_catkin_ws}"
 result=""
 (
-    # because, respectively, we want to collect results test failures and
-    # ROS stupidly expands undefined variables
+    # because ROS stupidly expands undefined variables, but we still need to
+    # collect test results failures
     set +eu
     . "/opt/ros/${ros_distro}/setup.sh"
     catkin_test_results "${copy_catkin_ws}"
@@ -648,5 +683,10 @@ result=""
 symlinks -cdrs "${copy_catkin_ws}"
 
 ttcopy "${copy_catkin_ws}" "${PWD}"
+
+# hold off on this for now
+if false; then
+    catkin_ws_pathfix "${copy_catkin_ws}" "${PWD}"
+fi
 
 exit "${result}"
