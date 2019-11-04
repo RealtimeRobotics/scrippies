@@ -7,9 +7,8 @@ set -euvx
 readonly this="$(readlink -f "$0")"
 readonly here="$(dirname "${this}")"
 readonly whatami="$(basename "${this}")"
-readonly tmpdir="$(mkdir -p "${HOME}/tmp" && mktemp -d "${HOME}/tmp/${whatami}.XXXXXX")"
+readonly tmpdir="$(mktemp -dt "${whatami}.XXXXXX")"
 
-readonly default_root_script="$(noop="$(mktemp "${tmpdir}/noop.XXXXXX")"; chmod +x "${noop}"; echo "${noop}")"
 readonly default_distribution="xenial"
 readonly default_ros_distro="kinetic"
 
@@ -324,8 +323,8 @@ infer_distribution() {
             echo "bionic"
             return 0
             ;;
-        *)
-            ;;
+        *) ;;
+
     esac
     error "unknown ros_distro: $1"
     return 1
@@ -398,7 +397,6 @@ dircopy() {
     ttcopy "$1" "${2:-${PWD}}"
 }
 
-
 # takes a source directory and a target directory; operates on the catkin
 # workspace currently residing at target directory; mutates files therein to
 # change source references to target references.
@@ -426,22 +424,22 @@ is_in_container() { grep -q 'lxc\|docker' /proc/1/cgroup; }
 
 catkin_verb() {
     catkin $@ \
-           --no-color \
-           --no-notify \
-           --no-status \
-           --summarize \
-           --verbose \
-           --cmake-args \
-           -DCMAKE_CPP_FLAGS="${CPPFLAGS:-}" \
-           -DCMAKE_CXX_COMPILER="${CXX:-$(command -v c++)}" \
-           -DCMAKE_CXX_FLAGS="${CXXFLAGS:-}" \
-           -DCMAKE_C_COMPILER="${CC:-$(command -v cc)}" \
-           -DCMAKE_C_FLAGS="${CFLAGS:-}" \
-           -DCMAKE_VERBOSE_MAKEFILE=true \
-           -- \
-           --make-args \
-           "${MAKEFLAGS:- --jobs=$((1 + $(nproc) >> 1)) --load-average=$(nproc)}" \
-           --
+        --no-color \
+        --no-notify \
+        --no-status \
+        --summarize \
+        --verbose \
+        --cmake-args \
+        -DCMAKE_CPP_FLAGS="${CPPFLAGS:-}" \
+        -DCMAKE_CXX_COMPILER="${CXX:-$(command -v c++)}" \
+        -DCMAKE_CXX_FLAGS="${CXXFLAGS:-}" \
+        -DCMAKE_C_COMPILER="${CC:-$(command -v cc)}" \
+        -DCMAKE_C_FLAGS="${CFLAGS:-}" \
+        -DCMAKE_VERBOSE_MAKEFILE=true \
+        -- \
+        --make-args \
+        "${MAKEFLAGS:- --jobs=$((1 + $(nproc) >> 1)) --load-average=$(nproc)}" \
+        --
 }
 
 # $1 : catkin_ws
@@ -461,6 +459,23 @@ vet_catkin_ws() {
     if ! [ -d "${result}/src" ]; then
         error "not a directory: ${result}/src"
         return 1
+    fi
+    echo "${result}"
+    return 0
+}
+
+vet_root_script() {
+    local result=""
+    if ! result="$(readlink -f "$1")"; then
+        error "bad path: $1"
+        return 1
+    fi
+    if ! [ -x "${result}" ]; then
+        warning "not executable: ${result}"
+        if ! chmod -v +x "${result}"; then
+            error "FAILURE: chmod -v +x ${result}"
+            return 1
+        fi
     fi
     echo "${result}"
     return 0
@@ -549,7 +564,10 @@ fi
 if [ -n "${root_script:-}" ]; then
     info "root_script: ${root_script}"
 else
-    readonly root_script="${default_root_script}"
+    if ! root_script="$(vet_root_script "$(mktemp -t noop.XXXXXX)")"; then
+        die "FAILURE: vet_root_script"
+    fi
+    readonly root_script="${root_script}"
     warning "defaulting root_script: ${root_script}"
 fi
 
@@ -559,9 +577,23 @@ dircopy "${catkin_ws}" "${copy_catkin_ws}"
 # https://stackoverflow.com/questions/23513045/how-to-check-if-a-process-is-running-inside-docker-container
 # https://stackoverflow.com/questions/20010199/how-to-determine-if-a-process-runs-inside-lxc-docker
 if ! is_in_container; then
+    # We build stuff under $TMPDIR. Sometimes, the build requires the
+    # extraction of tarballs. Extracting tarballs on OverlayFS is, apparently,
+    # full of fail (https://github.com/moby/moby/issues/19647). This is
+    # especially problematic because the default backing store for docker is
+    # OverlayFS.
+    #
+    # To get around the OverlayFS issue, we need to bind-mount the host $TMPDIR
+    # to the container $TMPDIR. To isolate the current build from others like
+    # it, we first override $TMPDIR to a location specific to the current
+    # build.
+    #
+    # Also, there's a prevailing assumption that source will be built within
+    # the home directory of the user executing the build. To satisfy this
+    # assumption within the container, we create a luser with HOME=$TMPDIR .
     readonly image_name="registry.gitlab.com/realtime-robotics/ros-dpkg:${ros_distro}"
     if [ "true" = "${DOCKER_IMAGE_PULL:-false}" ] \
-           || ! docker image inspect "${image_name}" >/dev/null 2>&1; then
+        || ! docker image inspect "${image_name}" >/dev/null 2>&1; then
         docker image pull "${image_name}"
     else
         warning "skipping: docker image pull ${image_name}"
@@ -570,26 +602,28 @@ if ! is_in_container; then
 
     readonly docker_workdir="$(mktemp -ut docker_workdir.XXXXXX)"
     docker container run \
-           --env CONFIGURE_APT_OPTS="${CONFIGURE_APT_OPTS:-}" \
-           --env COPY_CATKIN_WS="${copy_catkin_ws}" \
-           --env DEBCONF_NONINTERACTIVE_SEEN=true \
-           --env DEBIAN_FRONTEND=noninteractive \
-           --env DISTRIBUTION="${distribution}" \
-           --env DOCKER_HOST_GID="$(id -g)" \
-           --env DOCKER_HOST_UID="$(id -u)" \
-           --env HERE="${here}" \
-           --env ROOT_SCRIPT="${root_script}" \
-           --env ROS_DISTRO="${ros_distro}" \
-           --env SUDO_FORCE_REMOVE=yes \
-           --env THIS="${this}" \
-           --interactive \
-           --mount type=bind,readonly,source="${copy_catkin_ws}",target="${copy_catkin_ws}" \
-           --mount type=bind,readonly,source="${root_script}",target="${root_script}" \
-           --mount type=bind,readonly,source="${this}",target="${this}" \
-           --mount type=bind,source="${PWD}",target="${docker_workdir}" \
-           --rm \
-           --workdir "${docker_workdir}" \
-           "${image_name}" sh <<'EOF'
+        --env CONFIGURE_APT_OPTS="${CONFIGURE_APT_OPTS:-}" \
+        --env COPY_CATKIN_WS="${copy_catkin_ws}" \
+        --env DEBCONF_NONINTERACTIVE_SEEN=true \
+        --env DEBIAN_FRONTEND=noninteractive \
+        --env DISTRIBUTION="${distribution}" \
+        --env DOCKER_HOST_GID="$(id -g)" \
+        --env DOCKER_HOST_UID="$(id -u)" \
+        --env HERE="${here}" \
+        --env ROOT_SCRIPT="${root_script}" \
+        --env ROS_DISTRO="${ros_distro}" \
+        --env SUDO_FORCE_REMOVE=yes \
+        --env THIS="${this}" \
+        --env TMPDIR="${TMPDIR}" \
+        --interactive \
+        --mount type=bind,readonly,source="${copy_catkin_ws}",target="${copy_catkin_ws}" \
+        --mount type=bind,readonly,source="${root_script}",target="${root_script}" \
+        --mount type=bind,readonly,source="${this}",target="${this}" \
+        --mount type=bind,source="${TMPDIR}",target="${TMPDIR}" \
+        --mount type=bind,source="${PWD}",target="${docker_workdir}" \
+        --rm \
+        --workdir "${docker_workdir}" \
+        "${image_name}" sh <<'EOF'
 set -euvx
 
 # maybe someday:
@@ -605,10 +639,10 @@ sh -c "${ROOT_SCRIPT}"
 
 groupadd -g "${DOCKER_HOST_GID}" luser
 useradd \
-    -m \
-    -u "${DOCKER_HOST_UID}" \
-    -g "${DOCKER_HOST_GID}" \
-    -s "$(command -v sh)" \
+    --home-dir "${TMPDIR}" \
+    --uid "${DOCKER_HOST_UID}" \
+    --gid "${DOCKER_HOST_GID}" \
+    --shell "$(command -v sh)" \
     luser
 
 # STUPID ROS: rosdep invokes sudo apt-get to install things
