@@ -472,7 +472,7 @@ vet_root_script() {
     fi
     if ! [ -x "${result}" ]; then
         warning "not executable: ${result}"
-        if ! chmod -v +x "${result}"; then
+        if ! chmod -v +x "${result}" >&2; then
             error "FAILURE: chmod -v +x ${result}"
             return 1
         fi
