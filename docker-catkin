@@ -708,6 +708,16 @@ EOF
 fi
 
 env | sort
+
+if getent hosts verdaccio.realtime.cxm >&2; then
+    if command -v npm >&2; then
+        npm config --verbose set registry http://verdaccio.realtime.cxm:4873/ >&2
+    fi
+    if command -v yarn >&2; then
+        yarn config --verbose set registry http://verdaccio.realtime.cxm:4873/ >&2
+    fi
+fi
+
 catkin init --workspace "${copy_catkin_ws}"
 catkin config --workspace "${copy_catkin_ws}" --extend "/opt/ros/${ros_distro}" --install
 catkin clean --workspace "${copy_catkin_ws}" --yes
