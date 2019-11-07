@@ -684,6 +684,14 @@ if [ -f "${pclros_config_cmake}" ]; then
     ! diff "${pclros_config_cmake}.backup" "${pclros_config_cmake}"
 fi
 
+# because gnu tar hates OverlayFS2
+if cmd_tar="$(command -v tar)"; then
+    if cmd_bsdtar="$(command -v bsdtar)"; then
+        dpkg-divert --local --rename "${cmd_tar}"
+        ln -vsf "${cmd_bsdtar}" "${cmd_tar}"
+    fi
+fi
+
 nice -n19 su luser <<'SU_LUSER'
 set -euvx
 ${THIS} -C ${COPY_CATKIN_WS} -D ${DISTRIBUTION} -R ${ROS_DISTRO}
