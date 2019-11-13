@@ -65,7 +65,7 @@ if ! [ -x /usr/bin/npm ]; then
     die "missing executable: /usr/bin/npm"
 fi
 
-tee >/usr/local/bin/npm <<'EOF'
+cat >/usr/local/bin/npm <<'EOF'
 #!/bin/sh
 set -euvx
 flock /usr/local/bin/npm -c "/usr/bin/npm $*"
