@@ -55,60 +55,10 @@ Examples:
 EOF
 }
 
-apt_config_path() {
-    cut -d= -f2 | xargs -n1 | paste -sd/ | xargs readlink -f
-}
-
-etc_apt_sources_list() {
-    apt-config shell _ Dir _ Dir::Etc _ Dir::Etc::sourcelist | apt_config_path
-}
-
-etc_apt_sources_list_d() {
-    apt-config shell _ Dir _ Dir::Etc _ Dir::Etc::sourceparts | apt_config_path
-}
-
-etc_apt_apt_conf_d() {
-    apt-config shell _ Dir _ Dir::Etc _ Dir::Etc::parts | apt_config_path
-}
-
-# read stdin (assumed to be apt sources list file body) into the given apt
-# sources list file
-#
-# $1 : listfile to be written
-read_into_listfile() {
-    info "installing: $1"
-    if [ -f "$1" ]; then
-        warning "file exists: $1"
-        warning "$(mv -v $1 $1.backup)"
-    fi
-    cat >"$1" <<EOF
-# $1
-#
-# This is a generated apt sources list file.
-#
-# https://wiki.debian.org/SourcesList
-#
-# generator : ${this}
-# user      : $(id)
-# uname     : $(uname -a)
-# date      : $(date -u +"%Y-%m-%dT%H:%M:%SZ")
-
-EOF
-    cat >>"$1"
-}
-
 # 3.282 Portable Filename Character Set
 # https://pubs.opengroup.org/onlinepubs/9699919799/basedefs/V1_chap03.html#tag_03_282
 filenamify() {
     printf "$@" | tr -sc '[:alnum:]._-' '_'
-}
-
-# read stdin (assumed to be apt sources list file body) into a generated apt
-# sources list file named for the given url
-#
-# $1 : url from which to generate apt sources list file name
-read_into_generated() {
-    read_into_listfile "$(etc_apt_sources_list_d)/$(filenamify "$1").list"
 }
 
 apt_config_path() {
@@ -151,12 +101,6 @@ read_into_listfile() {
 
 EOF
     cat >>"$1"
-}
-
-# 3.282 Portable Filename Character Set
-# https://pubs.opengroup.org/onlinepubs/9699919799/basedefs/V1_chap03.html#tag_03_282
-filenamify() {
-    printf "$@" | tr -sc '[:alnum:]._-' '_'
 }
 
 # read stdin (assumed to be apt sources list file body) into a generated apt
@@ -369,7 +313,7 @@ EOF
     # * https://serverfault.com/questions/722893/debian-mirror-hash-sum-mismatch
     # * https://gist.github.com/trastle/5722089
     info "install $(etc_apt_apt_conf_d)/99fixbadproxy"
-    cat >"$(etc_apt_apt_conf_d)/99fixbadproxy" <<FIXBADPROXY
+    cat >"$(etc_apt_apt_conf_d)/99fixbadproxy" <<'FIXBADPROXY'
 Acquire::http::Pipeline-Depth "0";
 Acquire::http::No-Cache=True;
 Acquire::BrokenProxy=true;
