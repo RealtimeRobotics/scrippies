@@ -40,8 +40,6 @@ Dockerize catkin build, catkin run_tests, and catkin_test_results.
 Options:
 
     -h                 print usage and exit
-    -a                 configure apt (options following this are ignored)
-    -s ROOT_SCRIPT     execute ROOT_SCRIPT before doing anything else
     -C CATKIN_WS       run as if started in CATKIN_WS (default: \$PWD)
     -D DISTRIBUTION    ubuntu distribution (default: ${default_distribution})
     -R ROS_DISTRO      ros distribution (default: ${default_ros_distro})
@@ -57,259 +55,6 @@ Examples:
     \$ $0 -C \$HOME/catkin_ws -D ${default_distribution} -R ${default_ros_distro}
 
 EOF
-}
-
-apt_config_path() {
-    cut -d= -f2 | xargs -n1 | paste -sd/ | xargs readlink -f
-}
-
-etc_apt_sources_list() {
-    apt-config shell _ Dir _ Dir::Etc _ Dir::Etc::sourcelist | apt_config_path
-}
-
-etc_apt_sources_list_d() {
-    apt-config shell _ Dir _ Dir::Etc _ Dir::Etc::sourceparts | apt_config_path
-}
-
-etc_apt_apt_conf_d() {
-    apt-config shell _ Dir _ Dir::Etc _ Dir::Etc::parts | apt_config_path
-}
-
-# read stdin (assumed to be apt sources list file body) into the given apt
-# sources list file
-#
-# $1 : listfile to be written
-read_into_listfile() {
-    info "installing: $1"
-    if [ -f "$1" ]; then
-        warning "file exists: $1"
-        warning "$(mv -v $1 $1.backup)"
-    fi
-    cat >"$1" <<EOF
-# $1
-#
-# This is a generated apt sources list file.
-#
-# https://wiki.debian.org/SourcesList
-#
-# generator : ${this}
-# user      : $(id)
-# uname     : $(uname -a)
-# date      : $(date -u +"%Y-%m-%dT%H:%M:%SZ")
-
-EOF
-    cat >>"$1"
-}
-
-# 3.282 Portable Filename Character Set
-# https://pubs.opengroup.org/onlinepubs/9699919799/basedefs/V1_chap03.html#tag_03_282
-filenamify() {
-    printf "$@" | tr -sc '[:alnum:]._-' '_'
-}
-
-# read stdin (assumed to be apt sources list file body) into a generated apt
-# sources list file named for the given url
-#
-# $1 : url from which to generate apt sources list file name
-read_into_generated() {
-    read_into_listfile "$(etc_apt_sources_list_d)/$(filenamify "$1").list"
-}
-
-configure_apt() {
-    # http://archive.ubuntu.com/ubuntu/dists/bionic/main/
-    local ubuntu_arch_list="$(mktemp -t ubuntu_arch_list.XXXXXX)"
-    cat >"${ubuntu_arch_list}" <<'EOF'
-amd64
-i386
-EOF
-
-    # http://ports.ubuntu.com/ubuntu-ports/dists/bionic/main/
-    local ubuntu_ports_arch_list="$(mktemp -t ubuntu_ports_arch_list.XXXXXX)"
-    cat >"${ubuntu_ports_arch_list}" <<'EOF'
-arm64
-armhf
-ppc64el
-s390x
-EOF
-
-    # http://packages.ros.org/ros/ubuntu/dists/bionic/main/
-    local ros_arch_list="$(mktemp -t ros_arch_list.XXXXXX)"
-    cat >"${ros_arch_list}" <<'EOF'
-amd64
-arm64
-armhf
-i386
-EOF
-
-    local this_arch="$(dpkg --print-architecture)"
-    if ! grep -q "${this_arch}" "${ubuntu_arch_list}" "${ubuntu_ports_arch_list}"; then
-        die "unsupported architecture: ${this_arch}"
-    fi
-    if ! grep -q "${this_arch}" "${ros_arch_list}"; then
-        die "unsupported architecture: ${this_arch}"
-    fi
-
-    if ! command -v gpg >/dev/null 2>&1; then
-        die "missing command: gpg"
-    fi
-    info "gpg path: $(command -v gpg)"
-    info "gpg version: $(gpg --version)"
-
-    if [ -f "$(etc_apt_sources_list)" ]; then
-        mv -v "$(etc_apt_sources_list)" "$(etc_apt_sources_list).backup"
-    fi
-    find "$(etc_apt_sources_list_d)" -type f -name '*.list' -exec mv -v {} {}.backup \;
-
-    # The following heredoc is an ASCII-armored gpg pubkey from ROS. It's used
-    # to verify the debian packages therefrom. It was acquired like this:
-    #
-    # # apt-key adv \
-    # > --keyserver keyserver.ubuntu.com \
-    # > --recv-key C1CF6E31E6BADE8868B172B4F42ED6FBAB17C654
-    #
-    # It was exported like this:
-    #
-    # # apt-key adv --export --armor C1CF6E31E6BADE8868B172B4F42ED6FBAB17C654
-    #
-    # Reference: http://wiki.ros.org/kinetic/Installation/Ubuntu
-    info "installing ROS pubkey: C1CF6E31E6BADE8868B172B4F42ED6FBAB17C654"
-    apt-key add --verbose - <<'EOF'
------BEGIN PGP PUBLIC KEY BLOCK-----
-Version: GnuPG v1
-
-mQINBFzvJpYBEADY8l1YvO7iYW5gUESyzsTGnMvVUmlV3XarBaJz9bGRmgPXh7jc
-VFrQhE0L/HV7LOfoLI9H2GWYyHBqN5ERBlcA8XxG3ZvX7t9nAZPQT2Xxe3GT3tro
-u5oCR+SyHN9xPnUwDuqUSvJ2eqMYb9B/Hph3OmtjG30jSNq9kOF5bBTk1hOTGPH4
-K/AY0jzT6OpHfXU6ytlFsI47ZKsnTUhipGsKucQ1CXlyirndZ3V3k70YaooZ55rG
-aIoAWlx2H0J7sAHmqS29N9jV9mo135d+d+TdLBXI0PXtiHzE9IPaX+ctdSUrPnp+
-TwR99lxglpIG6hLuvOMAaxiqFBB/Jf3XJ8OBakfS6nHrWH2WqQxRbiITl0irkQoz
-pwNEF2Bv0+Jvs1UFEdVGz5a8xexQHst/RmKrtHLct3iOCvBNqoAQRbvWvBhPjO/p
-V5cYeUljZ5wpHyFkaEViClaVWqa6PIsyLqmyjsruPCWlURLsQoQxABcL8bwxX7UT
-hM6CtH6tGlYZ85RIzRifIm2oudzV5l+8oRgFr9yVcwyOFT6JCioqkwldW52P1pk/
-/SnuexC6LYqqDuHUs5NnokzzpfS6QaWfTY5P5tz4KHJfsjDIktly3mKVfY0fSPVV
-okdGpcUzvz2hq1fqjxB6MlB/1vtk0bImfcsoxBmF7H+4E9ZN1sX/tSb0KQARAQAB
-tCZPcGVuIFJvYm90aWNzIDxpbmZvQG9zcmZvdW5kYXRpb24ub3JnPokCVAQTAQoA
-PhYhBMHPbjHmut6IaLFytPQu1vurF8ZUBQJc7yaWAhsDBQkDwmcABQsJCAcCBhUK
-CQgLAgQWAgMBAh4BAheAAAoJEPQu1vurF8ZUkhIP/RbZY1ErvCEUy8iLJm9aSpLQ
-nDZl5xILOxyZlzpg+Ml5bb0EkQDr92foCgcvLeANKARNCaGLyNIWkuyDovPV0xZJ
-rEy0kgBrDNb3++NmdI/+GA92pkedMXXioQvqdsxUagXAIB/sNGByJEhs37F05AnF
-vZbjUhceq3xTlvAMcrBWrgB4NwBivZY6IgLvl/CRQpVYwANShIQdbvHvZSxRonWh
-NXr6v/Wcf8rsp7g2VqJ2N2AcWT84aa9BLQ3Oe/SgrNx4QEhA1y7rc3oaqPVu5ZXO
-K+4O14JrpbEZ3Xs9YEjrcOuEDEpYktA8qqUDTdFyZrxb9S6BquUKrA6jZgT913kj
-J4e7YAZobC4rH0w4u0PrqDgYOkXA9Mo7L601/7ZaDJob80UcK+Z12ZSw73IgBix6
-DiJVfXuWkk5PM2zsFn6UOQXUNlZlDAOj5NC01V0fJ8P0v6GO9YOSSQx0j5UtkUbR
-fp/4W7uCPFvwAatWEHJhlM3sQNiMNStJFegr56xQu1a/cbJH7GdbseMhG/f0BaKQ
-qXCI3ffB5y5AOLc9Hw7PYiTFQsuY1ePRhE+J9mejgWRZxkjAH/FlAubqXkDgterC
-h+sLkzGf+my2IbsMCuc+3aeNMJ5Ej/vlXefCH/MpPWAHCqpQhe2DET/jRSaM53US
-AHNx8kw4MPUkxExgI7Sd
-=4Ofr
------END PGP PUBLIC KEY BLOCK-----
-EOF
-
-    # The following heredoc is a Canonical-provided gpg pubkey in ascii
-    # armor. As of this writing, this pubkey is...
-    #
-    # * _not_ shipped with Bionic (18.04) distributions
-    #
-    # * required to verify signatures on some older packages that still bear
-    #   signatures made with the associated privkey
-    #
-    # This pubkey was acquired like this:
-    #
-    # # apt-key adv --keyserver keyserver.ubuntu.com --recv 0x40976EAF437D05B5
-    #
-    # It was exported like this:
-    #
-    # $ apt-key adv --armor --export --export-options=export-minimal 0x40976EAF437D05B5
-    info "installing public key: Canonical"
-    apt-key add --verbose - <<'EOF'
------BEGIN PGP PUBLIC KEY BLOCK-----
-Version: GnuPG v1
-
-mQGiBEFEnz8RBAC7LstGsKD7McXZgd58oN68KquARLBl6rjA2vdhwl77KkPPOr3O
-YeSBH/voUsqausJfDNuTNivOfwceDe50lbhq52ODj4Mx9Jg+4aHn9fmRkIk41i2J
-3hZiIGPACY/FsSlRq1AhBH2wZG1lQ45W/p77AeARRehYKJP9HY+1h/uihwCgrVE2
-VzACJLuZWHbDsPoJaNQjiFcEAKbUF1rMyjd1xJM7bZeXbs8c+ohUo/ywSI/OIr8n
-OfUswy08tsCof1KU0JBGLBCn0lHAYkAAcSr2pQ+k/odwdLQSjgm/JcUbi2ll16Wy
-7qFbUAUJ5xO+iP61vL3z4pJGcK1pMH6kBLA4CPBchJU/hh3f7vtX2oFdWw8tWqvm
-m/W7BACE7h0p86OP2G3ZJBjNYNQTK1LFYa+3G0spsVi9wl+Ih49ImPbSsUc2CSMA
-fDlGpYU8FuUKCgQnS3UZz6e0NwrHbZTHBy0ksRwT9jf7qSAEKEN2ECxfwR5i1dU+
-Yi4owkqGPhTLAbwkYdZZMcqfGgTXbiU4uy8DzMH/VhqP5wxdwbQ7VWJ1bnR1IEFy
-Y2hpdmUgQXV0b21hdGljIFNpZ25pbmcgS2V5IDxmdHBtYXN0ZXJAdWJ1bnR1LmNv
-bT6IXgQTEQIAHgUCQUSfPwIbAwYLCQgHAwIDFQIDAxYCAQIeAQIXgAAKCRBAl26v
-Q30FtSTNAJ9TwRBI9/dXHqsyx5LkWrPxyO2H7wCfXDY77HnwSK3tTqJzC4m6KuDd
-Rhe5Ag0EQUSfRxAIAMglvR9L60xR65i2QG4k2CnqZhmRUaTySxwOlNqKWtokUpzf
-8WmqA383uRLO8W9Tee1aF7KEMEUXgFiP7nns0kroKGLlcLbC+nEzkv51ao6Lcr5d
-Wr0817LmlvCl2N1KeQDkpHIAiS0LTjuEFY1yosi2ECiOan6sgcLaVqJVbEUeIaYJ
-OiZ8O1INTAGGdpVoSPvgkuZVKhP2uMIhYq3qgs6sB5SshEaKAGYIiH3lZ6UJUIVE
-uyumxpNPqkJ1Jkpo4SxIwy8KYiQ9Uo1NPP8bmvyGGaeWbRObLPHCO+iqxHxMiE4x
-X08sVizxA1YLw9iwtdNPOWkQsM9rn8W/gieH0SsAAwYIAMLzDICy2IA1wcmf5XPp
-g4JBFuMjeg8pIuaQZMf/MO2u+RlOVrIXPVFtYOpxQR9C1gCg+Blg2qQXBNw19cNT
-2EtSGi0HtycTww2xnIOnaLOzq/eI/LnakdAMclaTVbNltraepkoRFE4Exvuq/tCd
-zssotnmAha1tzGf+O3QyxkIBJ6zHFTNCREGBPYi/Pe9iviWqNAIr3SPhlw7STFrV
-Dgpne9VdpOZb3nVYYQHG6iwvVwzrE23+84RMFENq4Dhyx9L8R6+PMt347uT8dB03
-PXMovOpwXX06zMgfGwF60TZsmHqun/E3gE46YiME26rmUX5KSNTm9N2IZA8jz/sF
-Xz2ISQQYEQIACQUCQUSfRwIbDAAKCRBAl26vQ30FtdxYAJsFjU+xbex7gevyGQ2/
-mhqidES4MwCggqQyo+w1Twx6DKLF+3rF5nf1F3Q=
-=2m5N
------END PGP PUBLIC KEY BLOCK-----
-EOF
-
-    # https://unix.stackexchange.com/questions/20784/how-can-i-resolve-a-hostname-to-an-ip-address-in-a-bash-script
-    if getent hosts apt.realtime.cxm; then
-        info "SUCCESS: getent hosts apt.realtime.cxm"
-        local ros_url="http://apt.realtime.cxm/apt/ros/${distribution}"
-        if grep "${this_arch}" "${ubuntu_ports_arch_list}"; then
-            local ubuntu_url="http://apt.realtime.cxm/apt/ubuntu-ports/${distribution}"
-        else
-            local ubuntu_url="http://apt.realtime.cxm/apt/ubuntu/${distribution}"
-        fi
-    else
-        warning "FAILURE: getent hosts apt.realtime.cxm"
-        local ros_url="http://packages.ros.org/ros/ubuntu"
-        if grep "${this_arch}" "${ubuntu_ports_arch_list}"; then
-            local ubuntu_url="http://ports.ubuntu.com/ubuntu-ports"
-        else
-            local ubuntu_url="http://archive.ubuntu.com/ubuntu"
-        fi
-    fi
-
-    info "ros_url: ${ros_url}"
-    read_into_generated "${ros_url}" <<EOF
-deb     ${ros_url} ${distribution} main
-deb-src ${ros_url} ${distribution} main
-EOF
-
-    info "ubuntu_url: ${ubuntu_url}"
-    read_into_generated "${ubuntu_url}" <<EOF
-deb     ${ubuntu_url} ${distribution} main restricted universe multiverse
-deb     ${ubuntu_url} ${distribution}-backports main restricted universe multiverse
-deb     ${ubuntu_url} ${distribution}-security main restricted universe multiverse
-deb     ${ubuntu_url} ${distribution}-updates main restricted universe multiverse
-
-deb-src ${ubuntu_url} ${distribution} main restricted universe multiverse
-deb-src ${ubuntu_url} ${distribution}-backports main restricted universe multiverse
-deb-src ${ubuntu_url} ${distribution}-security main restricted universe multiverse
-deb-src ${ubuntu_url} ${distribution}-updates main restricted universe multiverse
-
-deb     ${ubuntu_url} ${distribution} main/debian-installer restricted/debian-installer universe/debian-installer multiverse/debian-installer
-
-# todo: fix this
-#deb     ${ubuntu_url} ${distribution}-updates main/debian-installer restricted/debian-installer universe/debian-installer multiverse/debian-installer
-
-EOF
-
-    # proactive protection against a bad proxy
-    #
-    # * https://askubuntu.com/questions/679233/failed-to-fetch-hash-sum-mismatch-tried-rm-apt-list-but-didnt-work
-    # * https://serverfault.com/questions/722893/debian-mirror-hash-sum-mismatch
-    # * https://gist.github.com/trastle/5722089
-    info "install $(etc_apt_apt_conf_d)/99fixbadproxy"
-    cat >"$(etc_apt_apt_conf_d)/99fixbadproxy" <<FIXBADPROXY
-Acquire::http::Pipeline-Depth "0";
-Acquire::http::No-Cache=True;
-Acquire::BrokenProxy=true;
-FIXBADPROXY
 }
 
 infer_distribution() {
@@ -487,25 +232,11 @@ trap cleanup EXIT
 export TMPDIR="${tmpdir}"
 export LC_ALL=C
 
-while getopts ":has:C:D:R:" opt; do
+while getopts ":hC:D:R:" opt; do
     case "${opt}" in
         h)
             usage
             exit 0
-            ;;
-        a)
-            # options after this one are ignored
-            configure_apt
-            exit "$?"
-            ;;
-        s)
-            if ! root_script="$(readlink -f "${OPTARG}")"; then
-                die "missing path: ${OPTARG}"
-            fi
-            if ! [ -x "${root_script}" ]; then
-                die "missing script: ${root_script}"
-            fi
-            readonly root_script="${root_script}"
             ;;
         C)
             if ! catkin_ws="$(vet_catkin_ws "${OPTARG}")"; then
@@ -560,17 +291,6 @@ else
     warning "defaulting catkin_ws: ${catkin_ws}"
 fi
 
-# root_script
-if [ -n "${root_script:-}" ]; then
-    info "root_script: ${root_script}"
-else
-    if ! root_script="$(vet_root_script "$(mktemp -t noop.XXXXXX)")"; then
-        die "FAILURE: vet_root_script"
-    fi
-    readonly root_script="${root_script}"
-    warning "defaulting root_script: ${root_script}"
-fi
-
 readonly copy_catkin_ws="$(mktemp -dt copy_catkin_ws.XXXXXX)"
 dircopy "${catkin_ws}" "${copy_catkin_ws}"
 
@@ -602,7 +322,6 @@ if ! is_in_container; then
 
     readonly docker_workdir="$(mktemp -ut docker_workdir.XXXXXX)"
     docker container run \
-        --env CONFIGURE_APT_OPTS="${CONFIGURE_APT_OPTS:-}" \
         --env COPY_CATKIN_WS="${copy_catkin_ws}" \
         --env DEBCONF_NONINTERACTIVE_SEEN=true \
         --env DEBIAN_FRONTEND=noninteractive \
@@ -610,17 +329,15 @@ if ! is_in_container; then
         --env DOCKER_HOST_GID="$(id -g)" \
         --env DOCKER_HOST_UID="$(id -u)" \
         --env HERE="${here}" \
-        --env ROOT_SCRIPT="${root_script}" \
         --env ROS_DISTRO="${ros_distro}" \
         --env SUDO_FORCE_REMOVE=yes \
         --env THIS="${this}" \
         --env TMPDIR="${TMPDIR}" \
         --interactive \
         --mount type=bind,readonly,source="${copy_catkin_ws}",target="${copy_catkin_ws}" \
-        --mount type=bind,readonly,source="${root_script}",target="${root_script}" \
-        --mount type=bind,readonly,source="${this}",target="${this}" \
-        --mount type=bind,source="${TMPDIR}",target="${TMPDIR}" \
+        --mount type=bind,readonly,source="${here}",target="${here}" \
         --mount type=bind,source="${PWD}",target="${docker_workdir}" \
+        --mount type=bind,source="${TMPDIR}",target="${TMPDIR}" \
         --rm \
         --workdir "${docker_workdir}" \
         "${image_name}" sh <<'EOF'
@@ -631,11 +348,10 @@ set -euvx
 
 dpkg-divert --local --rename /usr/bin/git
 
-# configure apt
-${THIS} -D ${DISTRIBUTION} -a
+${HERE}/configure-apt
 apt-get -y update
 
-sh -c "${ROOT_SCRIPT}"
+${HERE}/configure-npm
 
 groupadd -g "${DOCKER_HOST_GID}" luser
 useradd \
@@ -708,15 +424,6 @@ EOF
 fi
 
 env | sort
-
-if getent hosts verdaccio.realtime.cxm >&2; then
-    if command -v npm >&2; then
-        npm config --verbose set registry http://verdaccio.realtime.cxm:4873/ >&2
-    fi
-    if command -v yarn >&2; then
-        yarn config --verbose set registry http://verdaccio.realtime.cxm:4873/ >&2
-    fi
-fi
 
 catkin init --workspace "${copy_catkin_ws}"
 catkin config --workspace "${copy_catkin_ws}" --extend "/opt/ros/${ros_distro}" --install
