@@ -61,8 +61,19 @@ while getopts ":hf:" opt; do
 done
 shift "$((${OPTIND} - 1))"
 
-if ! command -v npm >/dev/null 2>&1; then
-    die "missing command: npm"
+if ! [ -x /usr/bin/npm ]; then
+    die "missing executable: /usr/bin/npm"
+fi
+
+tee >/usr/local/bin/npm <<'EOF'
+#!/bin/sh
+set -euvx
+flock /usr/local/bin/npm -c "/usr/bin/npm $*"
+EOF
+chmod +x /usr/local/bin/npm
+
+if ! [ "/usr/local/bin/npm" = "$(command -v npm)" ]; then
+    die "missing executable: /usr/local/bin/npm"
 fi
 
 npm --global config set progress=false
