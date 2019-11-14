@@ -61,19 +61,21 @@ while getopts ":hf:" opt; do
 done
 shift "$((${OPTIND} - 1))"
 
-if ! [ -x /usr/bin/npm ]; then
-    die "missing executable: /usr/bin/npm"
+if ! cmd_npm="$(command -v npm)"; then
+    die "missing command: npm"
 fi
 
-cat >/usr/local/bin/npm <<'EOF'
+if dpkg-divert --list "${cmd_npm}.distrib" | grep "${cmd_npm}.distrib"; then
+    warning "already diverted: ${cmd_npm}"
+else
+    info "$(dpkg-divert --local --rename "${cmd_npm}")"
+    cat >"${cmd_npm}" <<EOF
 #!/bin/sh
 set -euvx
-flock /usr/local/bin/npm -c "/usr/bin/npm $*"
+flock ${cmd_npm} -c "${cmd_npm}.distrib \$*"
 EOF
-chmod +x /usr/local/bin/npm
-
-if ! [ "/usr/local/bin/npm" = "$(command -v npm)" ]; then
-    die "missing executable: /usr/local/bin/npm"
+    chmod +x "${cmd_npm}"
+    info "$(file "${cmd_npm}")"
 fi
 
 npm --global config set progress=false
@@ -84,5 +86,7 @@ if getent hosts verdaccio.realtime.cxm; then
 0.0.0.0 registry.npmjs.org
 EOF
 fi
+
+npm --global config list
 
 exit "$?"
