@@ -80,6 +80,7 @@ fi
 
 npm --global config set cache=/tmp/npm-cache
 npm --global config set progress=false
+npm --global config set color=false
 
 if getent hosts verdaccio.realtime.cxm; then
     npm --global config set registry http://verdaccio.realtime.cxm:4873/
