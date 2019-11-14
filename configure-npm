@@ -78,6 +78,7 @@ EOF
     info "$(file "${cmd_npm}")"
 fi
 
+npm --global config set cache=/tmp/npm-cache
 npm --global config set progress=false
 
 if getent hosts verdaccio.realtime.cxm; then
