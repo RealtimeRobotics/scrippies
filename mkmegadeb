@@ -6,7 +6,7 @@ set -eu
 
 readonly this="$(readlink -f "$0")"
 readonly here="$(dirname "${this}")"
-readonly whatami="$(basename "${here}").$(basename "${this}")"
+readonly whatami="$(basename "${this}")"
 readonly tmpdir="$(mktemp -dt "${whatami}.XXXXXX")"
 
 readonly default_distribution="xenial"
@@ -108,12 +108,30 @@ Dir "$1";
 EOF
 }
 
+apt_install() {
+    xargs apt-get \
+        -yqo APT::Sandbox::User="$(whoami)" \
+        --no-install-recommends \
+        --verbose-versions \
+        install <"${1:-/dev/stdin}"
+}
+
+apt_uninstall() {
+    apt list --installed \
+        | cut -d/ -f1 \
+        | grep -Ff "${1:-/dev/stdin}" \
+        | xargs apt-get -yqo APT::Sandbox::User="$(whoami)" remove
+}
+
 run_megadeb() {
-    if [ -x "${here}/hooks/preinst" ]; then
-        "${here}/hooks/preinst"
+    env | sort
+
+    if ! [ "true" = "${requested_uninstall:-false}" ]; then
+        if [ -x "${here}/hooks/preinst" ]; then
+            "${here}/hooks/preinst"
+        fi
     fi
 
-    env | sort
     # vet the archive directory
     if ! [ -f "${here}/Packages" ]; then
         error "missing file: ${here}/Packages"
@@ -143,7 +161,7 @@ run_megadeb() {
     # versions that we didn't bring with us. The drawback is that the megadebs
     # are not truly "stand-alone" -- at least not in the same way that Debian
     # installers are.
-    if false; then
+    if true; then
         # remove old apt sources list files
         find "$(etc_apt)" -type f -name '*.list' -print -delete
         find "$(var_lib_apt_lists)" -type f -print -delete
@@ -157,21 +175,31 @@ EOF
     # update apt to make it aware of the new fake repo
     apt-get -yqo APT::Sandbox::User="$(whoami)" update
 
-    # if install-list.txt exists, then install those; else install everything
-    info "installing packages"
-    if [ -f "${here}/install-list.txt" ]; then
-        cat "${here}/install-list.txt"
+    local top_pkg_list="$(mktemp -t top_pkg_list.XXXXXX)"
+    find "${here}" -maxdepth 1 -type f -name '*.deb' \
+        -exec dpkg-deb --show --showformat='${Package}\n' {} \; \
+        >"${top_pkg_list}"
+    if ! [ "true" = "${requested_uninstall:-false}" ]; then
+        info "installing packages"
+        if [ -f "${here}/install-list.txt" ]; then
+            apt_install "${here}/install-list.txt"
+        else
+            apt_install "${top_pkg_list}"
+        fi
     else
-        find "${here}" -maxdepth 1 -type f -name '*.deb' \
-            -exec dpkg-deb --show --showformat='${Package}\n' {} \;
-    fi | xargs apt-get \
-        -yqo APT::Sandbox::User="$(whoami)" \
-        --no-install-recommends \
-        --verbose-versions \
-        install
+        info "uninstalling packages"
+        if [ -f "${here}/uninstall-list.txt" ]; then
+            apt_uninstall "${here}/uninstall-list.txt"
+        else
+            apt_uninstall "${top_pkg_list}"
+        fi
+        apt-get -yo Apt::AutoRemove::SuggestsImportant="false" autoremove
+    fi
 
-    if [ -x "${here}/hooks/postinst" ]; then
-        "${here}/hooks/postinst"
+    if ! [ "true" = "${requested_uninstall:-false}" ]; then
+        if [ -x "${here}/hooks/postinst" ]; then
+            "${here}/hooks/postinst"
+        fi
     fi
 }
 
@@ -192,10 +220,27 @@ build_megadeb() {
         warning "defaulting makeself_file_name: ${makeself_file_name}"
     fi
 
+    readonly help_header_file="$(mktemp -t help_header_file.XXXXXX)"
+    (
+        export product_name
+        export makeself_file_name
+        envsubst '${product_name},${makeself_file_name}' >"${help_header_file}" <<'EOF'
+Usage: ${makeself_file_name} [MAKESELF_OPTION]... -- [SCRIPT_OPTION]...
+Install ${product_name} packages and dependencies.
+
+Script Options:
+
+    -u    uninstall
+
+Makeself Options:
+EOF
+    )
+
     # note the (undocumented) trailing `-r` option; this is what causes the
     # self-extracting archive to invoke this script's `run_megadeb` function
     "${here}/mkself" \
-        --nocomp --sha256 \
+        --needroot --nocomp --sha256 \
+        --help-header "${help_header_file}" \
         "${makeself_archive_dir}" \
         "${makeself_file_name}" \
         "MegaDeb" \
@@ -209,13 +254,14 @@ export TMPDIR="${tmpdir}"
 export LC_ALL=C
 export DEBIAN_FRONTEND=noninteractive DEBCONF_NONINTERACTIVE_SEEN=true
 
-while getopts ":hrC:D:Ro:" opt; do
+while getopts ":hruC:D:Ro:p:" opt; do
     case "${opt}" in
         h)
             usage
             exit 0
             ;;
         r) readonly run_megadeb="true" ;;
+        u) readonly requested_uninstall="true" ;;
         C)
             if ! workdir="$(readlink -f "${OPTARG}")"; then
                 die "missing: ${OPTARG}"
@@ -228,6 +274,7 @@ while getopts ":hrC:D:Ro:" opt; do
         D) readonly distribution="${OPTARG}" ;;
         R) readonly repolize="true" ;;
         o) readonly makeself_file_name="${OPTARG}" ;;
+        p) readonly product_name="${OPTARG}" ;;
         :) die "missing argument: -${OPTARG}" ;;
         \?) die "bad option: -${OPTARG}" ;;
     esac
@@ -250,6 +297,13 @@ if [ -n "${workdir:-}" ]; then
 else
     readonly workdir="${PWD}"
     warning "defaulting workdir: ${workdir}"
+fi
+
+if [ -n "${product_name:-}" ]; then
+    info "product_name: ${product_name}"
+else
+    readonly product_name="$(basename "${workdir}")"
+    warning "defaulting product_name: ${product_name}"
 fi
 
 if [ "true" = "${run_megadeb:-false}" ]; then

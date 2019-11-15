@@ -478,6 +478,12 @@ apt_repolize "${apt_repo_dir}"
 info "repolizing ${workdir}"
 apt_repolize "${workdir}"
 
+info "generating uninstall list"
+(
+    packages2names "${apt_repo_dir}/Packages"
+    packages2names "${workdir}/Packages"
+) | sort -u >"${workdir}/uninstall-list.txt"
+
 # enumerate package edges; for each edge, the terminating node is the name
 # of a dependency; download every dependency
 info "enumerating package edges"
@@ -492,8 +498,8 @@ sort -uo "${package_depends}" "${package_depends}"
 info "enumerating package extants"
 readonly package_extants="$(mktemp -t package_extants.XXXXXX)"
 find "${workdir}" -type f -name '*.deb' \
-     -exec dpkg-deb --show --showformat='${Package}\n' {} \; \
-     >"${package_extants}"
+    -exec dpkg-deb --show --showformat='${Package}\n' {} \; \
+    >"${package_extants}"
 sort -uo "${package_extants}" "${package_extants}"
 
 info "enumerating package downloads"
@@ -532,7 +538,7 @@ if false; then
     comm -23 "${packages_all}" "${packages_scc}" >"${workdir}/install-list.txt"
 else
     find "${workdir}" -maxdepth 1 -type f -name '*.deb' \
-         -exec dpkg-deb --field {} 'Package' \; \
+        -exec dpkg-deb --field {} 'Package' \; \
         | sort -u >"${workdir}/install-list.txt"
 fi
 
