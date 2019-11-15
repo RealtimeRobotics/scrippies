@@ -78,6 +78,8 @@ EOF
     info "$(file "${cmd_npm}")"
 fi
 
+exit "$?"
+
 npm --global config set cache=/tmp/npm-cache
 npm --global config set progress=false
 npm --global config set color=false
