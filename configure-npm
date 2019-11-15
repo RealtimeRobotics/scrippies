@@ -84,9 +84,14 @@ npm --global config set color=false
 
 if getent hosts verdaccio.realtime.cxm; then
     npm --global config set registry http://verdaccio.realtime.cxm:4873/
-    tee -a /etc/hosts <<'EOF'
+    if ! grep -qF '0.0.0.0 registry.npmjs.org' /etc/hosts; then
+        tee -a /etc/hosts <<'EOF'
 0.0.0.0 registry.npmjs.org
 EOF
+    fi
+else
+    sed -i '/^0[.]0[.]0[.]0 registry[.]npmjs[.]org$/d' /etc/hosts
+    npm --global config delete registry
 fi
 
 npm --global config list
