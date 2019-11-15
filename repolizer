@@ -422,7 +422,6 @@ if ! is_in_container; then
 
     docker container run \
         --env APT_REPO_DIR="${apt_repo_dir}" \
-        --env CONFIGURE_APT_OPTS="${CONFIGURE_APT_OPTS:-}" \
         --env DEBCONF_NONINTERACTIVE_SEEN=true \
         --env DEBIAN_FRONTEND=noninteractive \
         --env DISTRIBUTION="${distribution}" \
@@ -448,7 +447,7 @@ fi
 
 rm -vf /etc/apt/sources.list
 find /etc/apt/sources.list.d /var/lib/apt/lists -type f -print -delete
-${HERE}/configure-apt ${CONFIGURE_APT_OPTS} ${DISTRIBUTION}
+${HERE}/configure-apt ${DISTRIBUTION}
 apt-get -y update
 apt-get -y --no-install-recommends install dpkg-dev
 
