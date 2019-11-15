@@ -108,24 +108,24 @@ Dir "$1";
 EOF
 }
 
+# $1 : list of packages to install
 apt_install() {
     xargs apt-get \
         -yqo APT::Sandbox::User="$(whoami)" \
         --no-install-recommends \
         --verbose-versions \
-        install <"${1:-/dev/stdin}"
+        install <"$1"
 }
 
+# $1 : list of packages to uninstall
 apt_uninstall() {
     apt list --installed \
         | cut -d/ -f1 \
-        | grep -Ff "${1:-/dev/stdin}" \
-        | xargs apt-get -yqo APT::Sandbox::User="$(whoami)" remove
+        | grep -Fxf "$1" \
+        | xargs -r apt-get -yqo APT::Sandbox::User="$(whoami)" remove
 }
 
 run_megadeb() {
-    env | sort
-
     if ! [ "true" = "${requested_uninstall:-false}" ]; then
         if [ -x "${here}/hooks/preinst" ]; then
             "${here}/hooks/preinst"
@@ -161,8 +161,9 @@ run_megadeb() {
     # versions that we didn't bring with us. The drawback is that the megadebs
     # are not truly "stand-alone" -- at least not in the same way that Debian
     # installers are.
-    if true; then
+    if [ "true" = "${requested_selfonly:-false}" ]; then
         # remove old apt sources list files
+        warning "running self-contained (without external packages)"
         find "$(etc_apt)" -type f -name '*.list' -print -delete
         find "$(var_lib_apt_lists)" -type f -print -delete
     fi
@@ -193,7 +194,6 @@ EOF
         else
             apt_uninstall "${top_pkg_list}"
         fi
-        apt-get -yo Apt::AutoRemove::SuggestsImportant="false" autoremove
     fi
 
     if ! [ "true" = "${requested_uninstall:-false}" ]; then
@@ -231,6 +231,7 @@ Install ${product_name} packages and dependencies.
 Script Options:
 
     -u    uninstall
+    -s    run self-contained (without external packages)
 
 Makeself Options:
 EOF
@@ -239,7 +240,7 @@ EOF
     # note the (undocumented) trailing `-r` option; this is what causes the
     # self-extracting archive to invoke this script's `run_megadeb` function
     "${here}/mkself" \
-        --needroot --nocomp --sha256 \
+        --nocomp --sha256 \
         --help-header "${help_header_file}" \
         "${makeself_archive_dir}" \
         "${makeself_file_name}" \
@@ -254,7 +255,7 @@ export TMPDIR="${tmpdir}"
 export LC_ALL=C
 export DEBIAN_FRONTEND=noninteractive DEBCONF_NONINTERACTIVE_SEEN=true
 
-while getopts ":hruC:D:Ro:p:" opt; do
+while getopts ":hrusC:D:Ro:p:" opt; do
     case "${opt}" in
         h)
             usage
@@ -262,6 +263,7 @@ while getopts ":hruC:D:Ro:p:" opt; do
             ;;
         r) readonly run_megadeb="true" ;;
         u) readonly requested_uninstall="true" ;;
+        s) readonly requested_selfonly="true" ;;
         C)
             if ! workdir="$(readlink -f "${OPTARG}")"; then
                 die "missing: ${OPTARG}"
