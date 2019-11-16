@@ -223,9 +223,9 @@ build_megadeb() {
     readonly help_header_file="$(mktemp -t help_header_file.XXXXXX)"
     (
         export product_name
-        export makeself_file_name
-        envsubst '${product_name},${makeself_file_name}' >"${help_header_file}" <<'EOF'
-Usage: ${makeself_file_name} [MAKESELF_OPTION]... -- [SCRIPT_OPTION]...
+        export makeself_basename="$(basename "${makeself_file_name}")"
+        envsubst '${product_name},${makeself_basename}' >"${help_header_file}" <<'EOF'
+Usage: ${makeself_basename} [MAKESELF_OPTION]... -- [SCRIPT_OPTION]...
 Install ${product_name} packages and dependencies.
 
 Script Options:
