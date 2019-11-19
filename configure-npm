@@ -2,7 +2,7 @@
 
 # scrippies/configure-npm
 
-set -euvx
+set -eu
 
 readonly this="$(readlink -f "$0")"
 readonly here="$(dirname "${this}")"
@@ -64,35 +64,31 @@ shift "$((${OPTIND} - 1))"
 if ! cmd_npm="$(command -v npm)"; then
     die "missing command: npm"
 fi
+export cmd_npm
 
-if dpkg-divert --list "${cmd_npm}.distrib" | grep "${cmd_npm}.distrib"; then
+if dpkg-divert --list "${cmd_npm}.distrib" | grep -q "${cmd_npm}.distrib"; then
     warning "already diverted: ${cmd_npm}"
 else
     info "$(dpkg-divert --local --rename "${cmd_npm}")"
-    cat >"${cmd_npm}" <<EOF
+    envsubst '${cmd_npm}' >"${cmd_npm}" <<'EOF'
 #!/bin/sh
-set -euvx
-flock ${cmd_npm} -c "${cmd_npm}.distrib \$*"
+set -eu
+cleanup() {
+    local status="$?"
+    rm -rf "${NPM_CONFIG_CACHE}" || true
+    return "${status}"
+}
+trap cleanup EXIT
+export NPM_CONFIG_CACHE="$(mktemp -dt npm_config_cache.XXXXXX)"
+flock ${cmd_npm} -c "${cmd_npm}.distrib --cache ${NPM_CONFIG_CACHE} $*"
 EOF
     chmod +x "${cmd_npm}"
     info "$(file "${cmd_npm}")"
 fi
 
-exit "$?"
-
-npm --global config set cache=/tmp/npm-cache
-npm --global config set progress=false
-npm --global config set color=false
-
-if getent hosts verdaccio.realtime.cxm; then
+if getent hosts verdaccio.realtime.cxm >/dev/null 2>&1; then
     npm --global config set registry http://verdaccio.realtime.cxm:4873/
-    if ! grep -qF '0.0.0.0 registry.npmjs.org' /etc/hosts; then
-        tee -a /etc/hosts <<'EOF'
-0.0.0.0 registry.npmjs.org
-EOF
-    fi
 else
-    sed -i '/^0[.]0[.]0[.]0 registry[.]npmjs[.]org$/d' /etc/hosts
     npm --global config delete registry
 fi
 
