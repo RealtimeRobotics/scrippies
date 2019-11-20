@@ -367,10 +367,18 @@ cat >/etc/sudoers.d/luser-apt-get <<LUSER_APT_GET
 luser $(hostname) = (root) NOPASSWD: $(command -v apt-get)
 LUSER_APT_GET
 
+root_home=$(getent passwd root | cut -d: -f6)
+luser_home=$(getent passwd luser | cut -d: -f6)
+if [ -d "${root_home}/.ros" ]; then
+    cp -vr ${root_home}/.ros ${luser_home}
+    chown -vR luser:luser ${luser_home}/.ros
+else
+    su -c "rosdep update --verbose" luser
+fi
+
 nice -n19 su luser <<'SU_LUSER'
 set -euvx
 # http://wiki.ros.org/rosdep#Install_dependency_of_all_packages_in_the_workspace
-rosdep update --verbose
 rosdep install \
     --default-yes \
     --from-path "${COPY_CATKIN_WS}/src" \
