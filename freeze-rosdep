@@ -1,0 +1,94 @@
+#!/bin/sh
+
+# scrippies/freeze-rosdep
+
+set -eu
+
+readonly this="$(readlink -f "$0")"
+readonly here="$(dirname "${this}")"
+readonly whatami="$(basename "${this}")"
+readonly tmpdir="$(mktemp -dt "${whatami}.XXXXXX")"
+
+log() { echo "${whatami}[$$]: $@" >&2; }
+error() { log "ERROR: $@"; }
+warning() { log "WARNING: $@"; }
+info() { log "INFO: $@"; }
+
+die() {
+    error "$@"
+    usage >&2
+    exit 1
+}
+
+cleanup() {
+    status="$?"
+    rm -rf "${tmpdir}"
+    return "${status}"
+}
+
+usage() {
+    cat <<EOF
+Usage: $0 [OPTION]... ROSDEP_LIST
+Cache rosdistro yamls and force rosdep to use them.
+
+Options:
+
+    -h    print usage and exit
+
+Examples:
+
+    \$ $0 /etc/ros/rosdep/sources.list.d/20-default.list
+
+EOF
+}
+
+# 3.282 Portable Filename Character Set
+# https://pubs.opengroup.org/onlinepubs/9699919799/basedefs/V1_chap03.html#tag_03_282
+filenamify() {
+    printf "$@" | tr -sc '[:alnum:]._-' '_'
+    # printf "$@" | base64 -w0
+}
+
+################################################################################
+
+trap cleanup EXIT
+export TMPDIR="${tmpdir}"
+export LC_ALL=C
+
+# while getopts ":hA:D:" opt; do
+while getopts ":h" opt; do
+    case "${opt}" in
+        h)
+            usage
+            exit 0
+            ;;
+        :) die "missing argument: -${OPTARG}" ;;
+        \?) die "bad option: -${OPTARG}" ;;
+    esac
+done
+shift "$((${OPTIND} - 1))"
+
+if ! [ 1 -eq "$#" ]; then
+    die "bad args"
+fi
+
+if ! rosdep_list="$(readlink -f "$1")"; then
+    die "bad path: $1"
+fi
+readonly rosdep_list="${rosdep_list}"
+
+if ! [ -f "${rosdep_list}" ]; then
+    die "bad file: ${rosdep_list}"
+fi
+
+readonly http_uri_list="$(mktemp -t http_uri_list.XXXXXX)"
+sed -nr 's/^(gbpdistro|yaml) (http[[:graph:]]+)(.*)$/\2/gp' <"${rosdep_list}" >"${http_uri_list}"
+sort -uo "${http_uri_list}" "${http_uri_list}"
+
+while read http_uri; do
+    file_uri="file:///var/lib/rosdep/$(filenamify "${http_uri}")"
+    curl --fail --silent --location --create-dirs --output "${file_uri#file://}" "${http_uri}"
+    sed -i "s|${http_uri}|${file_uri}|g" "${rosdep_list}"
+done <"${http_uri_list}"
+
+exit "$?"
