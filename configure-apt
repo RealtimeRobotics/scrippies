@@ -77,6 +77,10 @@ etc_apt_apt_conf_d() {
     apt-config shell _ Dir _ Dir::Etc _ Dir::Etc::parts | apt_config_path
 }
 
+etc_apt_preferences_d() {
+    apt-config shell _ Dir _ Dir::Etc _ Dir::Etc::preferencesparts | apt_config_path
+}
+
 # read stdin (assumed to be apt sources list file body) into the given apt
 # sources list file
 #
@@ -119,6 +123,8 @@ is_private() {
             return 1 ;;
         *) ;;
     esac
+    # https://serverfault.com/questions/13780/how-can-i-determine-if-a-machine-is-online-without-using-ping/923193#923193
+    # https://unix.stackexchange.com/questions/148985/how-to-get-a-response-from-any-url/148989#148989
     getent hosts apt.realtime.cxm
 }
 
@@ -159,24 +165,81 @@ EOF
     if ! command -v gpg >/dev/null 2>&1; then
         die "missing command: gpg"
     fi
-    info "gpg path: $(command -v gpg)"
-    info "gpg version: $(gpg --version)"
+    info "command -v gpg: $(command -v gpg)"
+    info "gpg --version: $(gpg --version)"
 
     if [ -f "$(etc_apt_sources_list)" ]; then
         mv -v "$(etc_apt_sources_list)" "$(etc_apt_sources_list).backup"
     fi
     find "$(etc_apt_sources_list_d)" -type f -name '*.list' -exec mv -v {} {}.backup \;
 
+    if is_private; then
+        info "installing Realtime Robotics pubkey: D232BF1C54E0F4B1F1D115920C2E51A6A3490B91"
+        apt-key add --verbose - <<'EOF'
+-----BEGIN PGP PUBLIC KEY BLOCK-----
+
+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
+nZWf
+=YX62
+-----END PGP PUBLIC KEY BLOCK-----
+EOF
+    fi
+
     # The following heredoc is an ASCII-armored gpg pubkey from ROS. It's used
     # to verify the debian packages therefrom. It was acquired like this:
     #
-    # # apt-key adv \
-    # > --keyserver keyserver.ubuntu.com \
-    # > --recv-key C1CF6E31E6BADE8868B172B4F42ED6FBAB17C654
+    # # apt-key adv --keyserver keyserver.ubuntu.com --recv-key C1CF6E31E6BADE8868B172B4F42ED6FBAB17C654
     #
     # It was exported like this:
     #
-    # # apt-key adv --export --armor C1CF6E31E6BADE8868B172B4F42ED6FBAB17C654
+    # # apt-key adv --armor --export --export-options=export-minimal C1CF6E31E6BADE8868B172B4F42ED6FBAB17C654
     #
     # Reference: http://wiki.ros.org/kinetic/Installation/Ubuntu
     info "installing ROS pubkey: C1CF6E31E6BADE8868B172B4F42ED6FBAB17C654"
@@ -223,12 +286,12 @@ EOF
     #
     # This pubkey was acquired like this:
     #
-    # # apt-key adv --keyserver keyserver.ubuntu.com --recv 0x40976EAF437D05B5
+    # # apt-key adv --keyserver keyserver.ubuntu.com --recv 630239CC130E1A7FD81A27B140976EAF437D05B5
     #
     # It was exported like this:
     #
-    # $ apt-key adv --armor --export --export-options=export-minimal 0x40976EAF437D05B5
-    info "installing public key: Canonical"
+    # $ apt-key adv --armor --export --export-options=export-minimal 630239CC130E1A7FD81A27B140976EAF437D05B5
+    info "installing Canonical pubkey: 630239CC130E1A7FD81A27B140976EAF437D05B5"
     apt-key add --verbose - <<'EOF'
 -----BEGIN PGP PUBLIC KEY BLOCK-----
 Version: GnuPG v1
@@ -262,10 +325,27 @@ mhqidES4MwCggqQyo+w1Twx6DKLF+3rF5nf1F3Q=
 -----END PGP PUBLIC KEY BLOCK-----
 EOF
 
-    # https://serverfault.com/questions/13780/how-can-i-determine-if-a-machine-is-online-without-using-ping/923193#923193
-    # https://unix.stackexchange.com/questions/148985/how-to-get-a-response-from-any-url/148989#148989
     if is_private; then
         info "found intranet host: apt.realtime.cxm"
+        local realtime_robotics_url="http://apt.realtime.cxm/apt/realtime-robotics/${distribution}"
+        info "realtime_robotics_url: ${realtime_robotics_url}"
+        read_into_generated "${realtime_robotics_url}" <<EOF
+deb     ${realtime_robotics_url} ${distribution} realtime-robotics
+deb-src ${realtime_robotics_url} ${distribution} realtime-robotics
+EOF
+        info "installing $(etc_apt_preferences_d)/realtime-robotics-priority"
+        cat >"$(etc_apt_preferences_d)/realtime-robotics-priority" <<'EOF'
+# /etc/apt/preferences.d/realtime-robotics-priority
+#
+# Prefer our private repository component over everything else --- even if it
+# means downgrading.
+#
+# https://wiki.debian.org/AptPreferences
+# https://manpages.debian.org/stretch/apt/apt_preferences.5.en.html
+Package: *
+Pin: release c=realtime-robotics
+Pin-Priority: 1001
+EOF
         local ros_url="http://apt.realtime.cxm/apt/ros/${distribution}"
         if grep "${this_arch}" "${ubuntu_ports_arch_list}"; then
             local ubuntu_url="http://apt.realtime.cxm/apt/ubuntu-ports/${distribution}"
