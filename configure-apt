@@ -335,9 +335,16 @@ EOF
 deb     ${realtime_robotics_url} ${distribution} realtime-robotics
 deb-src ${realtime_robotics_url} ${distribution} realtime-robotics
 EOF
-        info "installing $(etc_apt_preferences_d)/realtime-robotics-priority"
-        cat >"$(etc_apt_preferences_d)/realtime-robotics-priority" <<'EOF'
-# /etc/apt/preferences.d/realtime-robotics-priority
+
+        # Don't install the apt preferences yet. As of this writing, the only
+        # patched package we need (orocos-kdl) has a later version string than
+        # that available from upstream. To put a fine point on it, we don't
+        # need to force a downgrade to get our own stuff. -- neil 2019.11.27
+        if false; then
+            local realtime_robotics_priority="$(etc_apt_preferences_d)/realtime-robotics-priority"
+            info "installing ${realtime_robotics_priority}"
+            cat >"${realtime_robotics_priority}" <<EOF
+# ${realtime_robotics_priority}
 #
 # Prefer our private repository component over everything else --- even if it
 # means downgrading.
@@ -348,6 +355,8 @@ Package: *
 Pin: release c=realtime-robotics
 Pin-Priority: 1001
 EOF
+        fi
+
         local ros_url="http://apt.realtime.cxm/apt/ros/${distribution}"
         if grep "${this_arch}" "${ubuntu_ports_arch_list}"; then
             local ubuntu_url="http://apt.realtime.cxm/apt/ubuntu-ports/${distribution}"
