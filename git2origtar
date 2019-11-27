@@ -94,7 +94,7 @@ is_good_version() {
 
 # $1 : workdir
 infer_outfile() {
-    local package_name="$(basename "$1")"
+    local package_name="$(basename "$1" | tr '_' '-')"
     if ! is_good_package_name "${package_name}"; then
         error "bad package_name: ${package_name}"
         return 1
