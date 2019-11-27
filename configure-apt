@@ -118,9 +118,11 @@ read_into_generated() {
 is_private() {
     case "${force_network:-}" in
         private)
-            return 0 ;;
+            return 0
+            ;;
         public)
-            return 1 ;;
+            return 1
+            ;;
         *) ;;
     esac
     # https://serverfault.com/questions/13780/how-can-i-determine-if-a-machine-is-online-without-using-ping/923193#923193
