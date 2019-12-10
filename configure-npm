@@ -66,26 +66,6 @@ if ! cmd_npm="$(command -v npm)"; then
 fi
 export cmd_npm
 
-if dpkg-divert --list "${cmd_npm}.distrib" | grep -q "${cmd_npm}.distrib"; then
-    warning "already diverted: ${cmd_npm}"
-else
-    info "$(dpkg-divert --local --rename "${cmd_npm}")"
-    envsubst '${cmd_npm}' >"${cmd_npm}" <<'EOF'
-#!/bin/sh
-set -eu
-cleanup() {
-    local status="$?"
-    rm -rf "${NPM_CONFIG_CACHE}" || true
-    return "${status}"
-}
-trap cleanup EXIT
-export NPM_CONFIG_CACHE="$(mktemp -dt npm_config_cache.XXXXXX)"
-flock ${cmd_npm} -c "${cmd_npm}.distrib --cache ${NPM_CONFIG_CACHE} $*"
-EOF
-    chmod +x "${cmd_npm}"
-    info "$(file "${cmd_npm}")"
-fi
-
 if getent hosts verdaccio.realtime.cxm >/dev/null 2>&1; then
     npm --global config set registry http://verdaccio.realtime.cxm:4873/
 else
