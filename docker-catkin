@@ -332,12 +332,10 @@ if ! is_in_container; then
         --env ROS_DISTRO="${ros_distro}" \
         --env SUDO_FORCE_REMOVE=yes \
         --env THIS="${this}" \
-        --env TMPDIR="${TMPDIR}" \
         --interactive \
         --mount type=bind,readonly,source="${copy_catkin_ws}",target="${copy_catkin_ws}" \
         --mount type=bind,readonly,source="${here}",target="${here}" \
         --mount type=bind,source="${PWD}",target="${docker_workdir}" \
-        --mount type=bind,source="${TMPDIR}",target="${TMPDIR}" \
         --rm \
         --workdir "${docker_workdir}" \
         "${image_name}" sh <<'EOF'
@@ -355,7 +353,7 @@ ${HERE}/configure-npm
 
 groupadd -g "${DOCKER_HOST_GID}" luser
 useradd \
-    --home-dir "${TMPDIR}" \
+    --create-home \
     --uid "${DOCKER_HOST_UID}" \
     --gid "${DOCKER_HOST_GID}" \
     --shell "$(command -v sh)" \
