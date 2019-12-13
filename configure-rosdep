@@ -28,8 +28,8 @@ cleanup() {
 
 usage() {
     cat <<EOF
-Usage: $0 [OPTION]... PACKAGES_URL
-Trick rosdep into using additional apt packages.
+Usage: $0 [OPTION]... PACKAGE_NAME...
+Trick rosdep into using given Debian packages.
 
 Options:
 
@@ -37,115 +37,28 @@ Options:
 
 Examples:
 
-    \$ $0 http://realsense-hw-public.s3.amazonaws.com/Debian/apt-repo/dists/$(lsb_release -sc)/main/binary-amd64/Packages
+    \$ $0 nodejs
 
-    \$ $0 file:///var/lib/apt/lists/realsense-hw-public.s3.amazonaws.com_Debian_apt-repo_dists_bionic_main_binary-amd64_Packages.lz4
+    \$ $0 librealsense2-dkms
 
 EOF
 }
 
-# 3.282 Portable Filename Character Set
-# https://pubs.opengroup.org/onlinepubs/9699919799/basedefs/V1_chap03.html#tag_03_282
-filenamify() {
-    printf "$@" | tr -sc '[:alnum:]._-' '_'
-}
+# $1 : package_name
+configure_rosdep() {
+    # vet the given package name
+    local pkgname="$1"
+    if ! apt-cache policy "${pkgname}" >/dev/null; then
+        error "missing package: ${pkgname}"
+        return 1
+    fi
 
-################################################################################
-
-trap cleanup EXIT
-export TMPDIR="${tmpdir}"
-export LC_ALL=C
-
-if ! [ 0 -eq "$(id -u)" ]; then
-    sudo "${this}" $@
-    exit "$?"
-fi
-
-# while getopts ":hA:D:" opt; do
-while getopts ":h" opt; do
-    case "${opt}" in
-        h)
-            usage
-            exit 0
-            ;;
-        # A) readonly architecture="${OPTARG}" ;;
-        # D) readonly distribution="${OPTARG}" ;;
-        :) die "missing argument: -${OPTARG}" ;;
-        \?) die "bad option: -${OPTARG}" ;;
-    esac
-done
-shift "$((${OPTIND} - 1))"
-
-if ! [ 1 -eq "$#" ]; then
-    die "bad args"
-fi
-
-# TODO: take (or discover) InRelease URL, OS distribution, architecture;
-# discover/download the relevant Packages file(s), check hashes thereon,
-# uncompress, etc...
-#
-# https://wiki.debian.org/DebianRepository/Format
-
-# if ! [ -n "${architecture:-}" ]; then
-#     warning "unspecified architecture"
-#     if ! command -v uname >/dev/null 2>&1; then
-#         die "missing program: uname"
-#     fi
-#     readonly architecture="$(uname -m)"
-#     warning "detected architecture: ${architecture}"
-# fi
-
-# if ! [ -n "${distribution:-}" ]; then
-#     warning "unspecified distribution"
-#     if ! command -v lsb_release >/dev/null 2>&1; then
-#         die "missing program: lsb_release"
-#     fi
-#     readonly distribution="$(lsb_release -sc)"
-#     warning "detected distribution: ${distribution}"
-# fi
-
-readonly packages_url="$1"
-readonly packages="${tmpdir}/$(filenamify "${packages_url}")"
-readonly pkgname_list="${packages}.list"
-curl -fsSLo "${packages}" "${packages_url}"
-
-# > Unless a compression is indicated by the filename of the indices below, and
-# > (sic) index may be compressed in one or multiple of the following formats:
-# >
-# > * No compression (no extension)
-# > * XZ (.xz extension)
-# > * Gzip (.gz extension, usually for Contents files, and diffs)
-# > * Bzip2 (.bz2 extension, usually for Translations)
-# > * Gzip (.gz extension)
-# > * LZMA (.lzma extension)
-#
-# -- https://wiki.debian.org/DebianRepository/Format#Compression_of_indices
-case "${packages}" in
-    *Packages) decompress="cat" ;;
-    *Packages.bz2) decompress="bzip2 -cd" ;;
-    *Packages.gz) decompress="gzip -cd" ;;
-    # > I'd like us to try out using LZ4 compressed index files in
-    # > /var/lib/apt/lists for 18.04, starting from the beginning of the
-    # > development period with apt 1.6~alpha1 (ASAP).
-    #
-    # -- https://lists.ubuntu.com/archives/ubuntu-devel/2017-September/039972.html
-    # -- https://www.omgubuntu.co.uk/2017/09/ubuntu-devs-look-at-making-apt-index-files-smaller
-    *Packages.lz4) decompress="lz4 -cd" ;;
-    *Packages.lzma) decompress="lzma -cd" ;;
-    *Packages.xz) decompress="xz -cd" ;;
-    *) die "unrecognized Packages index file: ${packages}" ;;
-esac
-
-eval "${decompress}" <"${packages}" \
-     | sed -nr 's|^Package:[[:space:]]+([[:graph:]]+).*$|\1|gp' >"${pkgname_list}"
-sort -uo "${pkgname_list}" "${pkgname_list}"
-
-# Generate a "rosdep yaml" file that declares an eponymous ROS package package
-# for each apt package listed in the Packages file.
-readonly rosdep_yaml="/var/lib/rosdep/$(basename "${packages}").yaml"
-info "generating ${rosdep_yaml}"
-mkdir -vp "$(dirname "${rosdep_yaml}")"
-cat >"${rosdep_yaml}" <<EOF
+    # For the given package name, generate "rosdep yaml" file that declares an
+    # eponymous ROS package package.
+    local rosdep_yaml="/var/lib/rosdep/${pkgname}.yaml"
+    info "generating ${rosdep_yaml}"
+    mkdir -p "$(dirname "${rosdep_yaml}")"
+    cat >"${rosdep_yaml}" <<EOF
 # ${rosdep_yaml}
 #
 # This is a generated rosdep yaml file.
@@ -154,48 +67,30 @@ cat >"${rosdep_yaml}" <<EOF
 #
 # generator : ${this}
 # user      : $(id)
-# uname     : $(uname -a)
 # date      : $(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
-EOF
-
-# bloom v0.8.0 started vetting package names for every supported OS; we need to
-# tell bigger lies
-#
-# * https://github.com/ros-infrastructure/bloom/releases/tag/0.8.0
-# * https://github.com/ros-infrastructure/bloom/commit/c247a1320172867ce87c94939df1f166d25a0bb0#diff-de0a9b67ffe2874a076b5fdb15bad484
-# * https://docs.ros.org/independent/api/rosdep/html/rosdep_yaml_format.html#os-name-identifiers-and-supported-package-managers
-readonly osname_list="$(mktemp -t osname_list.XXXXXX)"
-cat >"${osname_list}" <<EOF
-arch
-cygwin
-debian
-fedora
-freebsd
-gentoo
-opensuse
-osx
-rhel
-ubuntu
-EOF
-
-while read pkgname; do
-    cat >>"${rosdep_yaml}" <<EOF
 ${pkgname}:
 EOF
-    while read osname; do
+
+    # bloom v0.8.0 started vetting package names for every supported OS; we
+    # need to tell bigger lies
+    #
+    # * https://github.com/ros-infrastructure/bloom/releases/tag/0.8.0
+    # * https://github.com/ros-infrastructure/bloom/commit/c247a1320172867ce87c94939df1f166d25a0bb0#diff-de0a9b67ffe2874a076b5fdb15bad484
+    # * https://docs.ros.org/independent/api/rosdep/html/rosdep_yaml_format.html#os-name-identifiers-and-supported-package-managers
+    local osname=""
+    for osname in arch cygwin debian fedora freebsd gentoo opensuse osx rhel ubuntu; do
         cat >>"${rosdep_yaml}" <<EOF
   ${osname}: [${pkgname}]
 EOF
-    done <"${osname_list}"
-done <"${pkgname_list}"
+    done
 
-# Generate a "rosdep sources list" file that references the freshly-generated
-# rosdep yaml.
-readonly rosdep_sources_list="/etc/ros/rosdep/sources.list.d/$(basename "${packages}").list"
-info "generating ${rosdep_sources_list}"
-mkdir -vp "$(dirname "${rosdep_sources_list}")"
-cat >"${rosdep_sources_list}" <<EOF
+    # Generate a "rosdep sources list" file that references the freshly
+    # generated rosdep yaml.
+    local rosdep_sources_list="/etc/ros/rosdep/sources.list.d/${pkgname}.list"
+    info "generating ${rosdep_sources_list}"
+    mkdir -p "$(dirname "${rosdep_sources_list}")"
+    cat >"${rosdep_sources_list}" <<EOF
 # ${rosdep_sources_list}
 #
 # This is a generated rosdep sources list file.
@@ -204,8 +99,34 @@ cat >"${rosdep_sources_list}" <<EOF
 #
 # generator : ${this}
 # user      : $(id)
-# uname     : $(uname -a)
 # date      : $(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
 yaml file://${rosdep_yaml}
 EOF
+}
+
+################################################################################
+
+trap cleanup EXIT
+export TMPDIR="${tmpdir}"
+export LC_ALL=C
+
+while getopts ":h" opt; do
+    case "${opt}" in
+        h)
+            usage
+            exit 0
+            ;;
+        :) die "missing argument: -${OPTARG}" ;;
+        \?) die "bad option: -${OPTARG}" ;;
+    esac
+done
+shift "$((${OPTIND} - 1))"
+
+if ! [ 0 -lt "$#" ]; then
+    die "bad args"
+fi
+
+for arg in $@; do
+    configure_rosdep "${arg}"
+done
