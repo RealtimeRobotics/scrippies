@@ -349,8 +349,6 @@ dpkg-divert --local --rename /usr/bin/git
 ${HERE}/configure-apt
 apt-get -y update
 
-${HERE}/configure-npm
-
 groupadd -g "${DOCKER_HOST_GID}" luser
 useradd \
     --create-home \
@@ -404,6 +402,10 @@ if cmd_tar="$(command -v tar)"; then
         dpkg-divert --local --rename "${cmd_tar}"
         ln -vsf "${cmd_bsdtar}" "${cmd_tar}"
     fi
+fi
+
+if command -v npm; then
+    "${HERE}/configure-npm"
 fi
 
 nice -n19 su luser <<'SU_LUSER'

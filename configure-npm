@@ -64,13 +64,19 @@ shift "$((${OPTIND} - 1))"
 if ! cmd_npm="$(command -v npm)"; then
     die "missing command: npm"
 fi
-export cmd_npm
+readonly cmd_npm="${cmd_npm}"
 
-if getent hosts verdaccio.realtime.cxm >/dev/null 2>&1; then
-    npm --global config set registry http://verdaccio.realtime.cxm:4873/
-else
-    npm --global config delete registry
+if ! getent hosts verdaccio.realtime.cxm >/dev/null 2>&1; then
+    warning "FAILURE: getent hosts verdaccio.realtime.cxm"
+    exit 0
 fi
+
+if ! timeout 5 npm ping --registry=http://verdaccio.realtime.cxm:4873/; then
+    warning "FAILURE: timeout 5 npm ping --registry=http://verdaccio.realtime.cxm:4873/"
+    exit 0
+fi
+
+npm --global config set registry http://verdaccio.realtime.cxm:4873/
 
 npm --global config list
 
