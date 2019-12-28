@@ -536,11 +536,6 @@ deb-src ${ubuntu_url} ${distribution}-backports main restricted universe multive
 deb-src ${ubuntu_url} ${distribution}-security main restricted universe multiverse
 deb-src ${ubuntu_url} ${distribution}-updates main restricted universe multiverse
 
-deb     ${ubuntu_url} ${distribution} main/debian-installer restricted/debian-installer universe/debian-installer multiverse/debian-installer
-
-# todo: fix this
-#deb     ${ubuntu_url} ${distribution}-updates main/debian-installer restricted/debian-installer universe/debian-installer multiverse/debian-installer
-
 EOF
 
 # proactive protection against a bad proxy
