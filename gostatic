@@ -111,11 +111,11 @@ fi
 # * https://golang.org/cmd/compile : `go tool compile -help`
 
 for pkg in $@; do
-    /usr/local/go/bin/go get -v -d "${pkg}/..."
+    /usr/local/go/bin/go get -v -d "${pkg}/..." || true
 
     /usr/local/go/bin/go \
         build \
-        -a -buildmode=pie \
+        -a \
         -ldflags='-s -w -linkmode external -extldflags "-static"' \
         "${pkg}"
 done
