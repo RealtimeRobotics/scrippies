@@ -1,0 +1,299 @@
+#!/bin/sh
+
+# scrippies/docker-ros-buildpackage
+
+set -euvx
+
+readonly this="$(readlink -f "$0")"
+readonly here="$(dirname "${this}")"
+readonly whatami="$(basename "${this}")"
+readonly tmpdir="$(mktemp -dt "${whatami}.XXXXXX")"
+
+readonly default_distribution="xenial"
+readonly default_ros_distro="kinetic"
+
+log() { echo "${whatami}[$$]: $@" >&2; }
+error() { log "ERROR: $@"; }
+warning() { log "WARNING: $@"; }
+info() { log "INFO: $@"; }
+
+die() {
+    error "$@"
+    usage >&2
+    exit 1
+}
+
+cleanup() {
+    local status="$?"
+    rm -rf "${tmpdir}"
+    if command -v docker >/dev/null 2>&1; then
+        docker system prune --force --filter until=6h >&2 || true
+    fi
+    return "${status}"
+}
+
+usage() {
+    cat <<EOF
+Usage: $0 [OPTION]...
+Dockerize catkin build, catkin run_tests, and catkin_test_results.
+
+Options:
+
+    -h                 print usage and exit
+    -C CATKIN_WS       run as if started in CATKIN_WS (default: \$PWD)
+    -D DISTRIBUTION    ubuntu distribution (default: ${default_distribution})
+    -R ROS_DISTRO      ros distribution (default: ${default_ros_distro})
+
+Examples:
+
+    \$ $0
+
+    \$ $0 -C \$HOME/catkin_ws
+
+    \$ $0 -C \$HOME/catkin_ws -D ${default_distribution}
+
+    \$ $0 -C \$HOME/catkin_ws -D ${default_distribution} -R ${default_ros_distro}
+
+EOF
+}
+
+infer_distribution() {
+    local result=""
+    case "$1" in
+        kinetic)
+            echo "xenial"
+            return 0
+            ;;
+        melodic)
+            echo "bionic"
+            return 0
+            ;;
+        *) ;;
+
+    esac
+    error "unknown ros_distro: $1"
+    return 1
+}
+
+infer_ros_distro() {
+    case "$1" in
+        xenial)
+            echo "kinetic"
+            return 0
+            ;;
+        bionic)
+            echo "melodic"
+            return 0
+            ;;
+        *) ;;
+    esac
+    error "unknown distribution: $1"
+    return 1
+}
+
+# https://stackoverflow.com/questions/23513045/how-to-check-if-a-process-is-running-inside-docker-container
+# https://stackoverflow.com/questions/20010199/how-to-determine-if-a-process-runs-inside-lxc-docker
+is_in_container() { grep -q 'lxc\|docker' /proc/1/cgroup; }
+
+# $1 : catkin_ws
+#
+# take catkin_ws and vet it; for good catkin_ws, print it and return success;
+# otherwise, print nothing and return failure
+vet_catkin_ws() {
+    local result=""
+    if ! result="$(readlink -f "$1")"; then
+        error "bad path: $1"
+        return 1
+    fi
+    if ! [ -d "${result}" ]; then
+        error "not a directory: ${result}"
+        return 1
+    fi
+    if ! [ -d "${result}/src" ]; then
+        error "not a directory: ${result}/src"
+        return 1
+    fi
+    echo "${result}"
+    return 0
+}
+
+vet_root_script() {
+    local result=""
+    if ! result="$(readlink -f "$1")"; then
+        error "bad path: $1"
+        return 1
+    fi
+    if ! [ -x "${result}" ]; then
+        warning "not executable: ${result}"
+        if ! chmod -v +x "${result}" >&2; then
+            error "FAILURE: chmod -v +x ${result}"
+            return 1
+        fi
+    fi
+    echo "${result}"
+    return 0
+}
+
+################################################################################
+
+trap cleanup EXIT
+export TMPDIR="${tmpdir}"
+export LC_ALL=C
+
+while getopts ":hC:D:R:" opt; do
+    case "${opt}" in
+        h)
+            usage
+            exit 0
+            ;;
+        C)
+            if ! catkin_ws="$(vet_catkin_ws "${OPTARG}")"; then
+                die "FAILURE: vet_catkin_ws ${OPTARG}"
+            fi
+            readonly catkin_ws="${catkin_ws}"
+            ;;
+        D) readonly distribution="${OPTARG}" ;;
+        R) readonly ros_distro="${OPTARG}" ;;
+        :) die "missing argument: -${OPTARG}" ;;
+        \?) die "bad option: -${OPTARG}" ;;
+    esac
+done
+shift "$((${OPTIND} - 1))"
+
+# distribution
+if [ -n "${distribution:-}" ]; then
+    info "distribution: ${distribution}"
+elif [ -n "${ros_distro:-}" ]; then
+    if ! distribution="$(infer_distribution "${ros_distro}")"; then
+        die "FAILURE: infer_distribution ${ros_distro}"
+    fi
+    readonly distribution="${distribution}"
+    warning "inferred distribution: ${distribution}"
+else
+    readonly distribution="${default_distribution}"
+    warning "defaulted distribution: ${distribution}"
+fi
+
+# ros_distro
+if [ -n "${ros_distro:-}" ]; then
+    info "ros_distro: ${ros_distro}"
+elif [ -n "${distribution:-}" ]; then
+    if ! ros_distro="$(infer_ros_distro "${distribution}")"; then
+        die "FAILURE: infer_ros_distro ${distribution}"
+    fi
+    readonly ros_distro="${ros_distro}"
+    warning "inferred ros_distro: ${ros_distro}"
+else
+    readonly ros_distro="${default_ros_distro}"
+    warning "defaulted ros_distro: ${ros_distro}"
+fi
+
+# catkin_ws
+if [ -n "${catkin_ws:-}" ]; then
+    info "catkin_ws: ${catkin_ws}"
+else
+    if ! catkin_ws="$(vet_catkin_ws "${PWD}")"; then
+        die "failure: vet_catkin_ws ${PWD}"
+    fi
+    readonly catkin_ws="${catkin_ws}"
+    warning "defaulting catkin_ws: ${catkin_ws}"
+fi
+
+# https://stackoverflow.com/questions/23513045/how-to-check-if-a-process-is-running-inside-docker-container
+# https://stackoverflow.com/questions/20010199/how-to-determine-if-a-process-runs-inside-lxc-docker
+if ! is_in_container; then
+    export HOOK_INIT="$(mktemp -t hook_init.XXXXXX)"
+    cat >"${HOOK_INIT}" <<'EOF'
+#!/bin/sh
+set -euvx               
+sudo mk-build-deps -irt'apt-get -o Debug::pkgProblemResolver=yes --no-install-recommends --yes'
+EOF
+    chmod 0755 "${HOOK_INIT}"
+
+    readonly image_name="registry.gitlab.com/realtime-robotics/ros-dpkg:${ros_distro}"
+    if [ "true" = "${DOCKER_IMAGE_PULL:-false}" ] \
+        || ! docker image inspect "${image_name}" >/dev/null 2>&1; then
+        docker image pull "${image_name}"
+    else
+        warning "skipping: docker image pull ${image_name}"
+    fi
+    docker image inspect "${image_name}"
+
+    readonly docker_workdir="$(mktemp -ut docker_workdir.XXXXXX)"
+    docker container run \
+        --env CATKIN_WS="${catkin_ws}" \
+        --env DEBCONF_NONINTERACTIVE_SEEN=true \
+        --env DEBEMAIL="${DEBEMAIL:-}" \
+        --env DEBFULLNAME="${DEBFULLNAME:-}" \
+        --env DEBIAN_FRONTEND=noninteractive \
+        --env DISTRIBUTION="${distribution}" \
+        --env DOCKER_HOST_GID="$(id -g)" \
+        --env DOCKER_HOST_UID="$(id -u)" \
+        --env HERE="${here}" \
+        --env HOOK_INIT="${HOOK_INIT}" \
+        --env ROS_DISTRO="${ros_distro}" \
+        --env THIS="${this}" \
+        --interactive \
+        --mount type=bind,readonly,source="${HOOK_INIT}",target="${HOOK_INIT}" \
+        --mount type=bind,readonly,source="${here}",target="${here}" \
+        --mount type=bind,source="$(dirname "${catkin_ws}")",target="$(dirname "${catkin_ws}")" \
+        --rm \
+        --workdir "${catkin_ws}" \
+        "${image_name}" sh <<'EOF'
+set -euvx
+
+# maybe someday:
+#dpkg-divert --local --rename /bin/bash
+
+dpkg-divert --local --rename /usr/bin/git
+
+${HERE}/configure-apt
+apt-get -y update
+
+groupadd -g "${DOCKER_HOST_GID}" luser
+useradd \
+    --create-home \
+    --uid "${DOCKER_HOST_UID}" \
+    --gid "${DOCKER_HOST_GID}" \
+    --shell "$(command -v sh)" \
+    luser
+
+# STUPID ROS: rosdep invokes sudo apt-get to install things
+apt-get -y --no-install-recommends install sudo
+cat >/etc/sudoers.d/luser-apt-get <<LUSER_APT_GET
+luser $(hostname) = (root) NOPASSWD: $(command -v mk-build-deps)
+LUSER_APT_GET
+
+su -c 'rosdep update --verbose' luser
+
+# because pcl_ros has too many shared objects
+pclros_config_cmake="/opt/ros/${ROS_DISTRO}/share/pcl_ros/cmake/pcl_rosConfig.cmake"
+if [ -f "${pclros_config_cmake}" ]; then
+    sed -r \
+        -i.backup \
+        -e 's,;/usr/include/vtk[[:alnum:].-]+,,g' \
+        -e 's,;/usr/lib(/x86_64-linux-gnu)?/libvtk[[:alnum:].-]+,,g' \
+        "${pclros_config_cmake}"
+    ! diff "${pclros_config_cmake}.backup" "${pclros_config_cmake}"
+fi
+
+if command -v npm; then
+    "${HERE}/configure-npm"
+fi
+
+nice -n19 su luser <<'SU_LUSER'
+set -euvx
+${THIS} -C ${CATKIN_WS} -D ${DISTRIBUTION} -R ${ROS_DISTRO}
+SU_LUSER
+
+EOF
+    exit "$?"
+fi
+
+env | sort
+
+"${here}/ros-buildpackage" \
+    --hook-init="${HOOK_INIT}" \
+    -uc -us -j"$(($(nproc) >> 1))"
+
+exit "$?"
