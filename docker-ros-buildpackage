@@ -302,8 +302,8 @@ env | sort
 "${here}/ros-buildpackage" \
     --hook-init="${HOOK_INIT}" \
     -uc -us -j"$((7 + $(nproc) >> 3))" \
-    | tee /dev/null
-# Q. Why `| tee /dev/null` ?
+    2>&1 | tee /dev/null
+# Q. Why `2>&1 | tee /dev/null` ?
 #
 # A. "make: write error: stdout" on parallel builds
 # https://bugs.launchpad.net/ubuntu/+source/linux-signed/+bug/1814393
