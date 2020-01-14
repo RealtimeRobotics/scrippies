@@ -301,6 +301,6 @@ env | sort
 
 "${here}/ros-buildpackage" \
     --hook-init="${HOOK_INIT}" \
-    -uc -us -j"$(($(nproc) >> 1))"
+    -uc -us -j"$((7 + $(nproc) >> 3))"
 
 exit "$?"
