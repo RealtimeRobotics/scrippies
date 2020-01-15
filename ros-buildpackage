@@ -255,25 +255,11 @@ export PKG_CONFIG_PATH=$(INSTALLATION_PREFIX)/lib/pkgconfig
 # 	https://github.com/ros-infrastructure/bloom/issues/327
 export DEB_CXXFLAGS_MAINT_APPEND=-DNDEBUG
 
+# because "make: write error: stdout" on parallel builds
+# https://bugs.launchpad.net/ubuntu/+source/linux-signed/+bug/1814393
+export MAKEFLAGS=--output-sync=line
+export TERM=dumb
 
-# It's _really_ hard to get a parallel build out of cmake. Here are some things
-# that don't work:
-#
-#export DH_OPTIONS="--parallel"
-#export DEB_BUILD_OPTIONS="parallel=$(nproc)"
-#export MAKEFLAGS="--jobs=$((1 + $(nproc) >> 1)) --max-load=$(nproc)"
-#
-# Here are some things people are saying about this:
-#
-# https://bugs.launchpad.net/ubuntu/+source/debhelper/+bug/1193077
-# https://www.debian.org/doc/debian-policy/ch-source.html#s-debianrules-options
-# https://dyn.manpages.debian.org/stretch/debhelper/debhelper.7.en.html
-# https://dyn.manpages.debian.org/stretch/dpkg-dev/dpkg-buildpackage.1.en.html
-#
-# Here's the issue and pull request I created:
-#
-# * https://github.com/ros-infrastructure/bloom/issues/546
-# * https://github.com/ros-infrastructure/bloom/pull/547
 
 %:
 	dh $@ -v --buildsystem=cmake --parallel --with systemd
@@ -285,6 +271,7 @@ override_dh_auto_configure:
 	if [ -f "$(INSTALLATION_PREFIX)/setup.sh" ]; then . "$(INSTALLATION_PREFIX)/setup.sh"; fi && \
 	dh_auto_configure -- \
 		-DCATKIN_BUILD_BINARY_PACKAGE="1" \
+		-DCMAKE_VERBOSE_MAKEFILE=true \
 		-DCMAKE_INSTALL_PREFIX="$(INSTALLATION_PREFIX)" \
 		-DCMAKE_PREFIX_PATH="$(INSTALLATION_PREFIX)"
 
