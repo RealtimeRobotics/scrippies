@@ -231,6 +231,15 @@ generate_debian_changelog() {
 }
 
 generate_debian_rules() {
+    # because "make: write error: stdout" on parallel builds
+    # https://bugs.launchpad.net/ubuntu/+source/linux-signed/+bug/1814393
+    cat >"${PWD}/wrap-make"<<'EOF'
+#!/bin/sh
+set -euvx
+make --output-sync=line $@
+EOF
+    chmod 0755 "${PWD}/wrap-make"
+
     read_into "$1" <<'EOF'
 #!/usr/bin/make -f
 
@@ -255,8 +264,6 @@ export PKG_CONFIG_PATH=$(INSTALLATION_PREFIX)/lib/pkgconfig
 # 	https://github.com/ros-infrastructure/bloom/issues/327
 export DEB_CXXFLAGS_MAINT_APPEND=-DNDEBUG
 
-# because "make: write error: stdout" on parallel builds
-# https://bugs.launchpad.net/ubuntu/+source/linux-signed/+bug/1814393
 export MAKEFLAGS=--output-sync=line
 export TERM=dumb
 
@@ -271,6 +278,7 @@ override_dh_auto_configure:
 	if [ -f "$(INSTALLATION_PREFIX)/setup.sh" ]; then . "$(INSTALLATION_PREFIX)/setup.sh"; fi && \
 	dh_auto_configure -- \
 		-DCATKIN_BUILD_BINARY_PACKAGE="1" \
+		-DCMAKE_MAKE_PROGRAM="$(PWD)/wrap-make" \
 		-DCMAKE_VERBOSE_MAKEFILE=true \
 		-DCMAKE_INSTALL_PREFIX="$(INSTALLATION_PREFIX)" \
 		-DCMAKE_PREFIX_PATH="$(INSTALLATION_PREFIX)"
