@@ -248,8 +248,10 @@ EOF
         --env DOCKER_HOST_GID="$(id -g)" \
         --env DOCKER_HOST_UID="$(id -u)" \
         --env HERE="${here}" \
+        --env MAKEFLAGS="${MAKEFLAGS:---output-sync=line}" \
         --env HOOK_INIT="${HOOK_INIT}" \
         --env ROS_DISTRO="${ros_distro}" \
+        --env TERM=dumb \
         --env THIS="${this}" \
         --interactive \
         --mount type=bind,readonly,source="${HOOK_INIT}",target="${HOOK_INIT}" \
@@ -301,11 +303,6 @@ env | sort
 
 "${here}/ros-buildpackage" \
     --hook-init="${HOOK_INIT}" \
-    -uc -us -j"$((7 + $(nproc) >> 3))" \
-    >/dev/stdout 2>&1
-# Q. Why `>/dev/stdout 2>&1` ?
-#
-# A. "make: write error: stdout" on parallel builds
-# https://bugs.launchpad.net/ubuntu/+source/linux-signed/+bug/1814393
+    -uc -us -j"$((7 + $(nproc) >> 3))"
 
 exit "$?"
