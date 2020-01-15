@@ -248,7 +248,6 @@ EOF
         --env DOCKER_HOST_GID="$(id -g)" \
         --env DOCKER_HOST_UID="$(id -u)" \
         --env HERE="${here}" \
-        --env MAKEFLAGS="${MAKEFLAGS:---output-sync=line}" \
         --env HOOK_INIT="${HOOK_INIT}" \
         --env ROS_DISTRO="${ros_distro}" \
         --env TERM=dumb \
