@@ -1,0 +1,88 @@
+#!/bin/sh
+
+set -eu
+
+readonly this="$(readlink -f "$0")"
+readonly here="$(dirname "${this}")"
+readonly whatami="$(basename "${this}")"
+readonly tmpdir="$(mktemp -dt "${whatami}.XXXXXX")"
+
+log() { echo "${whatami}[$$]: $@" >&2; }
+error() { log "ERROR: $@"; }
+warning() { log "WARNING: $@"; }
+info() { log "INFO: $@"; }
+
+die() {
+    error "$@"
+    usage >&2
+    exit 1
+}
+
+cleanup() {
+    status="$?"
+    rm -rf "${tmpdir}"
+    return "${status}"
+}
+
+usage() {
+    cat <<EOF
+Usage: $0 [OPTION]... UNIT_NAME [VAR=VAL]...
+Configure systemd environment variables.
+
+Notes:
+    When given no VAR=VAL, $0 prints the override file if it exists.
+
+Options:
+    -h    print usage and exit
+
+Examples:
+
+    # $0 rtr_appliance_app
+
+    # $0 rtr_appliance_app RTR_LOG_LEVEL=DEBUG
+
+    # $0 rtr_spatial_perception KILL_REALSENSE=true
+
+EOF
+}
+
+################################################################################
+
+trap cleanup EXIT
+export TMPDIR="${tmpdir}"
+export LC_ALL=C
+
+while getopts ":h" opt; do
+    case "${opt}" in
+        h)
+            usage
+            exit 0
+            ;;
+        :) die "missing argument: -${OPTARG}" ;;
+        \?) die "bad option: -${OPTARG}" ;;
+    esac
+done
+shift "$((${OPTIND} - 1))"
+
+if [ 0 -eq "$#" ]; then
+    die "bad args"
+fi
+
+readonly unit_name="$1"
+shift 1
+
+if [ 0 -eq "$#" ]; then
+    # no varvals, just dump the override if it exists
+    SYSTEMD_EDITOR="cat" systemctl edit "${unit_name}"
+else
+    readonly override="$(mktemp -t override.XXXXXX)"
+    cat >"${override}" <<'EOF'
+[Service]
+EOF
+    for arg in $@; do
+        echo "Environment=${arg}" >>"${override}"
+    done
+    SYSTEMD_EDITOR="cp ${override}" systemctl edit "${unit_name}"
+fi
+
+exit "$?"
