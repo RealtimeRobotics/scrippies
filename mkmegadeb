@@ -115,6 +115,10 @@ apt_install() {
         --no-install-recommends \
         --verbose-versions \
         install <"$1"
+    apt-get \
+        -yqo APT::Sandbox::User="$(whoami)" \
+        --verbose-versions \
+        upgrade
 }
 
 # $1 : list of packages to uninstall
