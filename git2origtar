@@ -32,9 +32,12 @@ Usage: $0 [OPTION]...
 From a git checkout, create an orig tarball and print its path.
 
 Options
-    -h            print this usage and return success
-    -C WORKDIR    run as if started in WORKDIR (default: \$PWD)
-    -o OUTFILE    write to OUTFILE (default: \$PWD/\$(basename \$WORKDIR)_\$(git -C \$WORKDIR describe --long --always).orig.tar)
+    -h                 print this usage and return success
+    -f                 use force
+    -C WORKDIR         run as if started in WORKDIR (default: \$PWD)
+    -P PACKAGE_NAME    override PACKAGE (default: \$(basename \$WORKDIR | tr -s '_' '-'))
+    -V VERSION         override VERSION (default: \$(git -C \$WORKDIR describe --long --always))
+    -o OUTFILE         write to OUTFILE (default: \$PWD/\$PACKAGE_\$VERSION.orig.tar)
 
 Examples:
 
@@ -88,27 +91,36 @@ is_good_package_name() {
     echo $@ | grep -Eq '^[a-z0-9][a-z0-9.+-]+$'
 }
 
-is_good_version() {
-    echo $@ | grep -Eq '^[[:digit:]]+\.[[:digit:]]+\.[[:digit:]]+-[[:digit:]]+-g[[:xdigit:]]{7,40}$'
-}
-
-# $1 : workdir
-infer_outfile() {
-    local package_name="$(basename "$1" | tr '_' '-')"
-    if ! is_good_package_name "${package_name}"; then
-        error "bad package_name: ${package_name}"
+vet_package_name() {
+    if ! is_good_package_name "$1"; then
+        error "bad package_name: $1"
         return 1
     fi
-    local version="$(git -C "$1" describe --long --always)"
-    if ! is_good_version "${version}"; then
-        if ! [ "true" = "${requested_force:-false}" ]; then
-            error "bad version: ${version}"
-            return 1
-        fi
-        warning "bad version: ${version}"
-    fi
-    echo "${PWD}/${package_name}_${version}.orig.tar"
+    echo "$1"
     return 0
+}
+
+# take workdir; print vetted package name on success; print nothing on failure
+infer_package_name() {
+    vet_package_name "$(basename "$1" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]' | tr -sc 'a-z0-9.+-' '-')"
+}
+
+is_good_version() {
+    echo $@ | grep -Eq '^[[:digit:]]+[.][[:digit:]]+[.][[:digit:]]+[-][[:digit:]]+[-]g[[:xdigit:]]{7,40}$'
+}
+
+vet_version() {
+    if ! is_good_version "$1"; then
+        error "bad version: $1"
+        return 1
+    fi
+    echo "$1"
+    return 0
+}
+
+# take workdir; print vetted version on success; print nothing on failure
+infer_version() {
+    vet_version "$(git -C "$1" describe --long --always)"
 }
 
 vet_workdir() {
@@ -167,15 +179,32 @@ trap cleanup EXIT
 export TMPDIR="${tmpdir}"
 export LC_ALL=C
 
-while getopts ":hfC:o:" opt; do
+while getopts ":hfC:P:V:o:" opt; do
     case "${opt}" in
         h)
             usage
             exit "$?"
             ;;
-        f) requested_force="true" ;;
-        C) workdir="${OPTARG}" ;;
-        o) outfile="${OPTARG}" ;;
+        f) readonly requested_force="true" ;;
+        C)
+            if ! workdir="$(vet_workdir "${OPTARG}")"; then
+                die "bad workdir: ${OPTARG}"
+            fi
+            readonly workdir="${workdir}"
+            ;;
+        P)
+            if ! package_name="$(vet_package_name "${OPTARG}")"; then
+                die "bad package_name: ${OPTARG}"
+            fi
+            readonly package_name="${package_name}"
+            ;;
+        V)
+            if ! version="$(vet_version "${OPTARG}")"; then
+                die "FAILURE: vet_version ${OPTARG}"
+            fi
+            readonly version="${version}"
+            ;;
+        o) readonly outfile="${OPTARG}" ;;
         :) die "Missing argument: -${OPTARG}" ;;
         \?) die "Invalid option: -${OPTARG}" ;;
     esac
@@ -183,26 +212,52 @@ done
 shift "$((${OPTIND} - 1))"
 
 # workdir
-if ! [ -n "${workdir:-}" ]; then
-    workdir="${PWD}"
+if [ -n "${workdir:-}" ]; then
+    info "workdir: ${workdir}"
+else
+    if ! workdir="$(vet_workdir "${PWD}")"; then
+        die "bad workdir: ${PWD}"
+    fi
+    readonly workdir="${workdir}"
     warning "defaulted workdir: ${workdir}"
 fi
-if ! workdir="$(vet_workdir "${workdir}")"; then
-    die "FAILURE: vet_workdir ${workdir}"
-fi
-readonly workdir="${workdir}"
-info "workdir: ${workdir}"
 
 # outfile
-if ! [ -n "${outfile:-}" ]; then
-    outfile="$(infer_outfile "${workdir}")"
+if [ -n "${outfile:-}" ]; then
+    info "outfile: ${outfile}"
+else
+    # package_name
+    if [ -n "${package_name:-}" ]; then
+        info "package_name: ${package_name}"
+    else
+        if ! package_name="$(infer_package_name "${workdir}")"; then
+            die "FAILURE: infer_package_name ${workdir}"
+        fi
+        readonly package_name="${package_name}"
+        warning "inferred package_name: ${package_name}"
+    fi
+    # version
+    if [ -n "${version:-}" ]; then
+        info "version: ${version}"
+    else
+        if ! version="$(infer_version "${workdir}")"; then
+            die "FAILURE: infer_version ${workdir}"
+        fi
+        readonly version="${version}"
+        warning "inferred version: ${version}"
+    fi
+    readonly outfile="${PWD}/${package_name}_${version}.orig.tar"
     warning "inferred outfile: ${outfile}"
 fi
-if ! outfile="$(vet_outfile "${outfile}")"; then
-    die "FAILURE: vet_outfile ${outfile}"
+
+if [ -f "${outfile}" ]; then
+    warning "outfile exists: ${outfile}"
+    if ! [ "true" = "${requested_force:-false}" ]; then
+        die "will not overwrite without force"
+        return 1
+    fi
+    warning "$(rm -v "${outfile}")"
 fi
-readonly outfile="${outfile}"
-info "outfile: ${outfile}"
 
 # mtime
 mtime="$(git -C "${workdir}" show -s --format=%ci HEAD)"

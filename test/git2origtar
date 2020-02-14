@@ -1,0 +1,108 @@
+#!/bin/sh
+
+oneTimeSetUp() {
+    readonly this="$(readlink -f "$0")"
+    readonly here="$(dirname "${this}")"
+    readonly whatami="$(basename "${this}")"
+    readonly uut="$(dirname ${here})/${whatami}"
+    readonly tmpdir="$(mktemp -dt "${whatami}.XXXXXX")"
+    export TMPDIR="${tmpdir}"
+}
+
+setUp() {
+    git_bare="$(mktemp -dt git_bare.XXXXXX)"
+    git -C "${git_bare}" init --bare
+    git_work="$(mktemp -dt git_work.XXXXXX)"
+    git clone "file://${git_bare}" "${git_work}"
+    (
+        cd "${git_work}"
+        touch foo.txt
+        git add foo.txt
+        git commit -a -m 'add foo.txt'
+        git push --verbose
+    )
+}
+
+tearDown() {
+    rm -rf "${git_bare}" "${git_work}" || true
+}
+
+# tearDown() {
+oneTimeTearDown() {
+    rm -rf "${tmpdir}" || true
+}
+
+testBare() {
+    assertEquals "." "$(git -C "${git_bare}" rev-parse --git-dir)"
+    assertEquals "true" "$(git -C ${git_bare} rev-parse --is-bare-repository)"
+}
+
+testWork() {
+    assertEquals ".git" "$(git -C "${git_work}" rev-parse --git-dir)"
+    assertEquals "false" "$(git -C ${git_work} rev-parse --is-bare-repository)"
+}
+
+testOutfile() {
+    local outfile=""
+    outfile="$(mktemp -ut outfile.XXXXXX)"
+
+    assertFalse "[ -f ${outfile} ]" "[ -f ${outfile} ]"
+    assertTrue \
+        "${uut} -C ${git_work} -o ${outfile}" \
+        "${uut} -C ${git_work} -o ${outfile}"
+
+    assertTrue "[ -f ${outfile} ]"
+    assertFalse \
+        "${uut} -C ${git_work} -o ${outfile}" \
+        "${uut} -C ${git_work} -o ${outfile}"
+
+    assertTrue \
+        "${uut} -f -C ${git_work} -o ${outfile}" \
+        "${uut} -f -C ${git_work} -o ${outfile}"
+}
+
+testPackage() {
+    (
+        cd "${git_work}"
+        git tag -s -m 'tagging v1.2.3' 1.2.3
+        git push --tags
+    )
+    (
+        cd "$(mktemp -d)"
+        assertTrue \
+            "${uut} -C ${git_work} -P my-package" \
+            "${uut} -C ${git_work} -P my-package"
+        outfile="$(find "${PWD}" -type f -name '*.orig.tar')"
+        assertEquals "my-package" "$(basename "${outfile}" .orig.tar | cut -d_ -f1)"
+    )
+}
+
+testVersion() {
+    (
+        cd "$(mktemp -d)"
+        assertTrue \
+            "${uut} -C ${git_work} -V 2.4.6-8-gfffffff" \
+            "${uut} -C ${git_work} -V 2.4.6-8-gfffffff"
+        outfile="$(find "${PWD}" -type f -name '*.orig.tar')"
+        assertEquals "2.4.6-8-gfffffff" "$(basename "${outfile}" .orig.tar | cut -d_ -f2)"
+    )
+}
+
+testTags() {
+    (
+        cd "${git_work}"
+        git tag -s -m 'tagging v1.2.3' 1.2.3
+        git push --tags
+    )
+    (
+        cd "$(mktemp -d)"
+        assertTrue \
+            "${uut} -C ${git_work}" \
+            "${uut} -C ${git_work}"
+        outfile="$(find "${PWD}" -type f -name '*.orig.tar')"
+        assertEquals "1.2.3-0" "$(basename "${outfile}" .orig.tar | cut -d_ -f2 | cut -d- -f1-2)"
+    )
+}
+
+# Load shUnit2.
+. "$(dirname $(readlink -f $0))/shunit2/shunit2"
