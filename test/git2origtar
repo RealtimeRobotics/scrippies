@@ -9,19 +9,54 @@ oneTimeSetUp() {
     readonly uut="$(dirname ${here})/${whatami}"
     readonly tmpdir="$(mktemp -dt "${whatami}.XXXXXX")"
     export TMPDIR="${tmpdir}"
+    export GNUPGHOME="$(mktemp -dt GNUPGHOME.XXXXXX)"
+    export GIT_COMMITTER_NAME='Unit Tester'
+    export GIT_COMMITTER_EMAIL="$(whoami)@$(hostname --fqdn)"
+
+    # https://www.gnupg.org/documentation/manuals/gnupg/Unattended-GPG-key-generation.html
+    readonly gpg2_gen_key="$(mktemp -t gpg2_gen_key.XXXXXX)"
+    cat >"${gpg2_gen_key}" <<EOF
+%echo Generating unprotected transient key...
+%no-ask-passphrase
+%no-protection
+%transient-key
+Key-Type: default
+Subkey-Type: default
+Name-Real: ${GIT_COMMITTER_NAME}
+Name-Email: ${GIT_COMMITTER_EMAIL}
+Name-Comment: unprotected transient key
+Expire-Date: 0
+%echo Committing...
+%commit
+%echo ...done.
+EOF
+    gpg2 --batch --gen-key "${gpg2_gen_key}"
+    readonly keyid_list="$(mktemp -t keyid_list.XXXXXX)"
+    gpg2 --list-secret-keys --fingerprint --with-colons >"${keyid_list}"
+    cat "${keyid_list}" >&2
+    export GPG_KEYID="$(sed -nr 's/^fpr:::::::::([[:xdigit:]]{40}):$/\1/p' <"${keyid_list}" | head -1)"
+    echo "test" | gpg2 --clearsign
 }
 
 setUp() {
-    git_bare="$(mktemp -dt git_bare.XXXXXX)"
-    git -C "${git_bare}" init --bare
+    # git_bare="$(mktemp -dt git_bare.XXXXXX)"
+    # git -C "${git_bare}" init --bare
     git_work="$(mktemp -dt git_work.XXXXXX)"
-    git clone "file://${git_bare}" "${git_work}"
+    # git clone "file://${git_bare}" "${git_work}"
     (
         cd "${git_work}"
+        git init .
+        git config gpg.program gpg2
+        git config user.name "${GIT_COMMITTER_NAME}"
+        git config user.email "${GIT_COMMITTER_EMAIL}"
+        git config user.signingKey "${GPG_KEYID}"
+        git config commit.gpgSign true
         touch foo.txt
         git add foo.txt
         git commit -a -m 'add foo.txt'
-        git push --verbose
+        git tag -s -u "${GPG_KEYID}" -m 'tagging v1.2.3' 1.2.3
+        git describe --long --always
+        git tag --verify 1.2.3
     )
 }
 
@@ -34,10 +69,10 @@ oneTimeTearDown() {
     rm -rf "${tmpdir}" || true
 }
 
-testBare() {
-    assertEquals "." "$(git -C "${git_bare}" rev-parse --git-dir)"
-    assertEquals "true" "$(git -C ${git_bare} rev-parse --is-bare-repository)"
-}
+# testBare() {
+#     assertEquals "." "$(git -C "${git_bare}" rev-parse --git-dir)"
+#     assertEquals "true" "$(git -C ${git_bare} rev-parse --is-bare-repository)"
+# }
 
 testWork() {
     assertEquals ".git" "$(git -C "${git_work}" rev-parse --git-dir)"
@@ -45,7 +80,6 @@ testWork() {
 }
 
 testOutfile() {
-    local outfile=""
     outfile="$(mktemp -ut outfile.XXXXXX)"
 
     assertFalse "[ -f ${outfile} ]" "[ -f ${outfile} ]"
@@ -64,11 +98,6 @@ testOutfile() {
 }
 
 testPackage() {
-    (
-        cd "${git_work}"
-        git tag -s -m 'tagging v1.2.3' 1.2.3
-        git push --tags
-    )
     (
         cd "$(mktemp -d)"
         assertTrue \
@@ -91,11 +120,6 @@ testVersion() {
 }
 
 testTags() {
-    (
-        cd "${git_work}"
-        git tag -s -m 'tagging v1.2.3' 1.2.3
-        git push --tags
-    )
     (
         cd "$(mktemp -d)"
         assertTrue \

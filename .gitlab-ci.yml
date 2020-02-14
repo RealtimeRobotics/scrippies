@@ -1,0 +1,19 @@
+image: ubuntu
+
+variables:
+  BUILD_CODE: "${CI_JOB_ID}"
+  DOCKER_REPO: "${CI_REGISTRY_IMAGE}"
+  DOCKER_TAG: "${CI_COMMIT_REF_NAME}"
+  # https://docs.gitlab.com/ee/ci/git_submodules.html#using-git-submodules-in-your-ci-jobs
+  # https://docs.gitlab.com/ee/ci/yaml/README.html#git-submodule-strategy
+  GIT_SUBMODULE_STRATEGY: "recursive"
+  VCS_REF: "${CI_COMMIT_SHA}"
+  VCS_URL: "${CI_PROJECT_URL}"
+
+before_script:
+  - apt-get -y update
+  - apt-get -y install file git gnupg2
+
+test:
+  script:
+    - ./test/git2origtar
