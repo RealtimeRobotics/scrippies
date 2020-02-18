@@ -371,7 +371,9 @@ EOF
 if [ "private" = "${use_network:-public}" ]; then
     readonly freecad_repo_uri="http://apt.realtime.cxm/apt/freecad/${distribution}"
 else
-    readonly freecad_repo_uri="http://ppa.launchpad.net/freecad-maintainers/occt-releases/ubuntu"
+    # DON'T USE THE PUBLIC REPOSITORY
+    readonly freecad_repo_uri=""
+    # readonly freecad_repo_uri="http://ppa.launchpad.net/freecad-maintainers/occt-releases/ubuntu"
 fi
 readonly freecad_atyp_list="$(mktemp -t freecad_atyp_list.XXXXXX)"
 cat >"${freecad_atyp_list}" <<'EOF'
@@ -386,11 +388,15 @@ readonly freecad_comp_list="$(mktemp -t freecad_comp_list.XXXXXX)"
 cat >"${freecad_comp_list}" <<'EOF'
 main
 EOF
-setup_apt_list \
-    "${freecad_repo_uri}" \
-    "${freecad_atyp_list}" \
-    "${freecad_dist_list}" \
-    "${freecad_comp_list}"
+if [ -n "${freecad_repo_uri:-}" ]; then
+    setup_apt_list \
+        "${freecad_repo_uri}" \
+        "${freecad_atyp_list}" \
+        "${freecad_dist_list}" \
+        "${freecad_comp_list}"
+else
+    warning "skipping freecad repository"
+fi
 ###############
 # FREECAD END #
 ###############
