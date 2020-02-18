@@ -32,9 +32,12 @@ Usage: $0 [OPTION]... [DISTRIBUTION]
 Configure apt to use additional repositories.
 
 Notes:
-    DISTRIBUTION defaults to \$(lsb_release --short --codename).
+
+    * If not given, DISTRIBUTION discovery is attempted via $(lsb_release -sc)
+      or, failing that, $(/etc/os-release) definition for $(UBUNTU_CODENAME).
 
 Options:
+
     -h            print usage and exit
     -f NETWORK    force NETWORK={private,public} (default is to discover)
 
@@ -89,7 +92,7 @@ read_into_listfile() {
     info "installing: $1"
     if [ -f "$1" ]; then
         warning "file exists: $1"
-        warning "$(mv -v $1 $1.backup)"
+        warning "$(mv -v $1 $1.save)"
     fi
     cat >"$1" <<EOF
 # $1
@@ -115,21 +118,6 @@ read_into_generated() {
     read_into_listfile "$(etc_apt_sources_list_d)/$(filenamify "$1").list"
 }
 
-is_private() {
-    case "${force_network:-}" in
-        private)
-            return 0
-            ;;
-        public)
-            return 1
-            ;;
-        *) ;;
-    esac
-    # https://serverfault.com/questions/13780/how-can-i-determine-if-a-machine-is-online-without-using-ping/923193#923193
-    # https://unix.stackexchange.com/questions/148985/how-to-get-a-response-from-any-url/148989#148989
-    getent hosts apt.realtime.cxm
-}
-
 detect_distribution() {
     if command -v lsb_release >/dev/null 2>&1; then
         lsb_release --short --codename
@@ -151,6 +139,70 @@ detect_distribution() {
     return 1
 }
 
+vet_force_network() {
+    case "$1" in
+        private)
+            echo "$1"
+            return 0
+            ;;
+        public)
+            echo "$1"
+            return 0
+            ;;
+        *) break ;;
+    esac
+    error "bad force_network: $1"
+    return 1
+}
+
+# Take some things that describe an apt repository. Write a generated apt
+# sources list file that enables the referenced repository.
+#
+# $1 : repo_uri  ; https://wiki.debian.org/SourcesList#Repository_URL
+# $2 : atyp_list ; https://wiki.debian.org/SourcesList#Archive_type
+# $3 : dist_list ; https://wiki.debian.org/SourcesList#Distribution
+# $4 : comp_list ; https://wiki.debian.org/SourcesList#Component
+setup_apt_list() {
+    local repo_uri="$1"
+    local atyp_list="$2"
+    local dist_list="$3"
+    local comp_list="$4"
+    # list file is named for the uri it enables
+    local apt_list_file="$(etc_apt_sources_list_d)/$(filenamify "${repo_uri}").list"
+    info "installing: ${apt_list_file}"
+    if [ -f "${apt_list_file}" ]; then
+        warning "file exists: ${apt_list_file}"
+        warning "$(mv -v ${apt_list_file} ${apt_list_file}.save)"
+    fi
+    # write header
+    cat >"${apt_list_file}" <<EOF
+# ${apt_list_file}
+#
+# This is a generated apt sources list file.
+#
+# https://wiki.debian.org/SourcesList
+#
+# generator : ${this}
+# user      : $(id)
+# uname     : $(uname -a)
+# date      : $(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
+EOF
+    # write body
+    # Make sure atyp and dist are padded to the longest member
+    local atyp_width="$(wc -L <"${atyp_list}")"
+    local dist_width="$(wc -L <"${dist_list}")"
+    while read atyp; do
+        while read dist; do
+            printf "%-${atyp_width}s %s %-${dist_width}s %s\n" \
+                "${atyp}" \
+                "${repo_uri}" \
+                "${dist}" \
+                "$(paste -sd' ' <"${comp_list}")"
+        done <"${dist_list}"
+    done <"${atyp_list}" >>"${apt_list_file}"
+}
+
 ################################################################################
 
 trap cleanup EXIT
@@ -163,7 +215,13 @@ while getopts ":hf:" opt; do
             usage
             exit 0
             ;;
-        f) readonly force_network="${OPTARG}" ;;
+        f)
+            if ! force_network="$(vet_force_network "${OPTARG}")"; then
+                die "FAILURE: vet_force_network ${OPTARG}"
+            fi
+            readonly force_network="${force_network}"
+            readonly use_network="${force_network}"
+            ;;
         :) die "missing argument: -${OPTARG}" ;;
         \?) die "bad option: -${OPTARG}" ;;
     esac
@@ -187,66 +245,24 @@ case "$#" in
         ;;
 esac
 
-# http://archive.ubuntu.com/ubuntu/dists/bionic/main/
-readonly ubuntu_arch_list="$(mktemp -t ubuntu_arch_list.XXXXXX)"
-cat >"${ubuntu_arch_list}" <<'EOF'
-amd64
-i386
-EOF
-
-# http://ports.ubuntu.com/ubuntu-ports/dists/bionic/main/
-readonly ubuntu_ports_arch_list="$(mktemp -t ubuntu_ports_arch_list.XXXXXX)"
-cat >"${ubuntu_ports_arch_list}" <<'EOF'
-arm64
-armhf
-ppc64el
-s390x
-EOF
-
-# http://packages.ros.org/ros/ubuntu/dists/bionic/main/
-readonly ros_arch_list="$(mktemp -t ros_arch_list.XXXXXX)"
-cat >"${ros_arch_list}" <<'EOF'
-amd64
-arm64
-armhf
-i386
-EOF
-
-# https://deb.nodesource.com/node_10.x/dists/bionic/main/
-readonly node_arch_list="$(mktemp -t node_arch_list.XXXXXX)"
-cat >"${node_arch_list}" <<'EOF'
-amd64
-arm64
-armhf
-i386
-EOF
-
-# discover this arch; ascertain that it is supported
-readonly this_arch="$(dpkg --print-architecture)"
-if ! grep -q "${this_arch}" "${ubuntu_arch_list}" "${ubuntu_ports_arch_list}"; then
-    die "unsupported architecture: ${this_arch}"
-fi
-if ! grep -q "${this_arch}" "${ros_arch_list}"; then
-    die "unsupported architecture: ${this_arch}"
-fi
-if ! grep -q "${this_arch}" "${node_arch_list}"; then
-    die "unsupported architecture: ${this_arch}"
+if [ -n "${use_network:-}" ]; then
+    info "use_network: ${use_network}"
+else
+    # https://serverfault.com/questions/13780/how-can-i-determine-if-a-machine-is-online-without-using-ping/923193#923193
+    # https://unix.stackexchange.com/questions/148985/how-to-get-a-response-from-any-url/148989#148989
+    if getent hosts apt.realtime.cxm >/dev/null 2>&1; then
+        readonly use_network="private"
+    else
+        readonly use_network="public"
+    fi
+    warning "discovered use_network: ${use_network}"
 fi
 
-if ! command -v gpg >/dev/null 2>&1; then
-    die "missing command: gpg"
-fi
-info "command -v gpg: $(command -v gpg)"
-info "gpg --version: $(gpg --version)"
-
-if [ -f "$(etc_apt_sources_list)" ]; then
-    mv -v "$(etc_apt_sources_list)" "$(etc_apt_sources_list).backup"
-fi
-find "$(etc_apt_sources_list_d)" -type f -name '*.list' -exec mv -v {} {}.backup \;
-
-if is_private; then
-    info "installing Realtime Robotics pubkey: D232BF1C54E0F4B1F1D115920C2E51A6A3490B91"
-    apt-key add --verbose - <<'EOF'
+###########################
+# REALTIME-ROBOTICS BEGIN #
+###########################
+info "installing realtime robotics pubkey: 0xd232bf1c54e0f4b1f1d115920c2e51a6a3490b91"
+apt-key add --verbose - <<'EOF'
 -----BEGIN PGP PUBLIC KEY BLOCK-----
 
 mQINBF3YIJQBEADbuy4oFx43M3WXfD0sl+Qi/RFk/eiN4naOkSGn6Cn1MTjB6TuM
@@ -301,17 +317,88 @@ nZWf
 =YX62
 -----END PGP PUBLIC KEY BLOCK-----
 EOF
+if [ "private" = "${use_network:-public}" ]; then
+    readonly realtime_robotics_repo_uri="http://apt.realtime.cxm/apt/realtime-robotics/${distribution}"
+else
+    # THERE IS NO PUBLIC REPOSITORY
+    readonly realtime_robotics_repo_uri=""
 fi
+readonly realtime_robotics_atyp_list="$(mktemp -t realtime_robotics_atyp_list.XXXXXX)"
+cat >"${realtime_robotics_atyp_list}" <<'EOF'
+deb
+deb-src
+EOF
+readonly realtime_robotics_dist_list="$(mktemp -t realtime_robotics_dist_list.XXXXXX)"
+cat >"${realtime_robotics_dist_list}" <<EOF
+${distribution}
+EOF
+readonly realtime_robotics_comp_list="$(mktemp -t realtime_robotics_comp_list.XXXXXX)"
+cat >"${realtime_robotics_comp_list}" <<'EOF'
+realtime-robotics
+EOF
+if [ -n "${realtime_robotics_repo_uri:-}" ]; then
+    setup_apt_list \
+        "${realtime_robotics_repo_uri}" \
+        "${realtime_robotics_atyp_list}" \
+        "${realtime_robotics_dist_list}" \
+        "${realtime_robotics_comp_list}"
+else
+    warning "skipping realtime-robotics repository"
+fi
+#########################
+# REALTIME-ROBOTICS END #
+#########################
 
-# The following heredoc is the ASCII-armored gpg pubkey from Nodejs. It's used
-# to verify the debian packages therefrom. It was acquired like this:
-#
-# $ curl -LO https://deb.nodesource.com/gpgkey/nodesource.gpg.key
-#
-# The content of the same was copied into the heredoc below.
-#
-# Reference: https://github.com/nodesource/distributions/blob/master/README.md#debmanual
-info "installing public key: nodejs"
+#################
+# FREECAD BEGIN #
+#################
+info "installing freecad pubkey: 0x83193aa3b52ff6fcf10a1bbf005eae8119bb5bca"
+apt-key add --verbose - <<'EOF'
+-----BEGIN PGP PUBLIC KEY BLOCK-----
+Version: GnuPG v1
+
+mI0ETYF+BAEEAK1n4CPNzdG/rTNvteUkHOiSikl07GJl7jh8RjL4T2BA3g2J0M0g
+x20gOfc2Srbmg676cdf2kIzhfVPbjvWJnDYsFS1BOa0ZsKb0xN6lZzMU2lhmPMgF
+jJJk94BqeLlxr9wSqmOkR8X3yDtNWbZ+5xO1wDUP4GDZcCwesVsWfdXZABEBAAG0
+JUxhdW5jaHBhZCBQUEEgZm9yIEZyZWVDQUQgbWFpbnRhaW5lcnOIuAQTAQIAIgUC
+TYF+BAIbAwYLCQgHAwIGFQgCCQoLBBYCAwECHgECF4AACgkQAF6ugRm7W8oktwP+
+Nzk9OEg3kl8fNd9JeTWrw2UnisfPOIV7HTATpLqnXZQOQ+Q7QjsRL6yRMj+U6OWa
+9pgDrljJyg77DFCcHipCrR5LiXdxzzK2Z2wbStxsS2U3v7HJaXw4gmYAGyahswLa
+RzbmV95JXeFAGjXM5yH6FTxbzGdH/IaXN1ASMMZQedU=
+=3tnf
+-----END PGP PUBLIC KEY BLOCK-----
+EOF
+if [ "private" = "${use_network:-public}" ]; then
+    readonly freecad_repo_uri="http://apt.realtime.cxm/apt/freecad/${distribution}"
+else
+    readonly freecad_repo_uri="http://ppa.launchpad.net/freecad-maintainers/occt-releases/ubuntu"
+fi
+readonly freecad_atyp_list="$(mktemp -t freecad_atyp_list.XXXXXX)"
+cat >"${freecad_atyp_list}" <<'EOF'
+deb
+deb-src
+EOF
+readonly freecad_dist_list="$(mktemp -t freecad_dist_list.XXXXXX)"
+cat >"${freecad_dist_list}" <<EOF
+${distribution}
+EOF
+readonly freecad_comp_list="$(mktemp -t freecad_comp_list.XXXXXX)"
+cat >"${freecad_comp_list}" <<'EOF'
+main
+EOF
+setup_apt_list \
+    "${freecad_repo_uri}" \
+    "${freecad_atyp_list}" \
+    "${freecad_dist_list}" \
+    "${freecad_comp_list}"
+###############
+# FREECAD END #
+###############
+
+##############
+# NODE BEGIN #
+##############
+info "installing node pubkey: 0x9fd3b784bc1c6fc31a8a0a1c1655a0ab68576280"
 apt-key add --verbose - <<'EOF'
 -----BEGIN PGP PUBLIC KEY BLOCK-----
 Version: GnuPG v1
@@ -366,18 +453,37 @@ sckuXINIU3DFWzZGr0QrqkuE/jyr7FXeUJj9B7cLo+s/TXo+RaVfi3kOc9BoxIvy
 =CLGF
 -----END PGP PUBLIC KEY BLOCK-----
 EOF
+if [ "private" = "${use_network:-public}" ]; then
+    readonly node_repo_uri="http://apt.realtime.cxm/apt/node_10.x/${distribution}"
+else
+    readonly node_repo_uri="http://deb.nodesource.com/node_10.x"
+fi
+readonly node_atyp_list="$(mktemp -t node_atyp_list.XXXXXX)"
+cat >"${node_atyp_list}" <<'EOF'
+deb
+deb-src
+EOF
+readonly node_dist_list="$(mktemp -t node_dist_list.XXXXXX)"
+cat >"${node_dist_list}" <<EOF
+${distribution}
+EOF
+readonly node_comp_list="$(mktemp -t node_comp_list.XXXXXX)"
+cat >"${node_comp_list}" <<'EOF'
+main
+EOF
+setup_apt_list \
+    "${node_repo_uri}" \
+    "${node_atyp_list}" \
+    "${node_dist_list}" \
+    "${node_comp_list}"
+############
+# NODE END #
+############
 
-# The following heredoc is an ASCII-armored gpg pubkey from ROS. It's used
-# to verify the debian packages therefrom. It was acquired like this:
-#
-# # apt-key adv --keyserver keyserver.ubuntu.com --recv-key C1CF6E31E6BADE8868B172B4F42ED6FBAB17C654
-#
-# It was exported like this:
-#
-# # apt-key adv --armor --export --export-options=export-minimal C1CF6E31E6BADE8868B172B4F42ED6FBAB17C654
-#
-# Reference: http://wiki.ros.org/kinetic/Installation/Ubuntu
-info "installing ROS pubkey: C1CF6E31E6BADE8868B172B4F42ED6FBAB17C654"
+#############
+# ROS BEGIN #
+#############
+info "installing ROS pubkey: 0xc1cf6e31e6bade8868b172b4f42ed6fbab17c654"
 apt-key add --verbose - <<'EOF'
 -----BEGIN PGP PUBLIC KEY BLOCK-----
 Version: GnuPG v1
@@ -410,23 +516,37 @@ AHNx8kw4MPUkxExgI7Sd
 =4Ofr
 -----END PGP PUBLIC KEY BLOCK-----
 EOF
+if [ "private" = "${use_network:-public}" ]; then
+    readonly ros_repo_uri="http://apt.realtime.cxm/apt/ros/${distribution}"
+else
+    readonly ros_repo_uri="http://packages.ros.org/ros/ubuntu"
+fi
+readonly ros_atyp_list="$(mktemp -t ros_atyp_list.XXXXXX)"
+cat >"${ros_atyp_list}" <<'EOF'
+deb
+deb-src
+EOF
+readonly ros_dist_list="$(mktemp -t ros_dist_list.XXXXXX)"
+cat >"${ros_dist_list}" <<EOF
+${distribution}
+EOF
+readonly ros_comp_list="$(mktemp -t ros_comp_list.XXXXXX)"
+cat >"${ros_comp_list}" <<'EOF'
+main
+EOF
+setup_apt_list \
+    "${ros_repo_uri}" \
+    "${ros_atyp_list}" \
+    "${ros_dist_list}" \
+    "${ros_comp_list}"
+###########
+# ROS END #
+###########
 
-# The following heredoc is a Canonical-provided gpg pubkey in ascii
-# armor. As of this writing, this pubkey is...
-#
-# * _not_ shipped with Bionic (18.04) distributions
-#
-# * required to verify signatures on some older packages that still bear
-#   signatures made with the associated privkey
-#
-# This pubkey was acquired like this:
-#
-# # apt-key adv --keyserver keyserver.ubuntu.com --recv 630239CC130E1A7FD81A27B140976EAF437D05B5
-#
-# It was exported like this:
-#
-# $ apt-key adv --armor --export --export-options=export-minimal 630239CC130E1A7FD81A27B140976EAF437D05B5
-info "installing Canonical pubkey: 630239CC130E1A7FD81A27B140976EAF437D05B5"
+################
+# UBUNTU BEGIN #
+################
+info "installing ubuntu pubkey(s)"
 apt-key add --verbose - <<'EOF'
 -----BEGIN PGP PUBLIC KEY BLOCK-----
 Version: GnuPG v1
@@ -455,88 +575,67 @@ zssotnmAha1tzGf+O3QyxkIBJ6zHFTNCREGBPYi/Pe9iviWqNAIr3SPhlw7STFrV
 Dgpne9VdpOZb3nVYYQHG6iwvVwzrE23+84RMFENq4Dhyx9L8R6+PMt347uT8dB03
 PXMovOpwXX06zMgfGwF60TZsmHqun/E3gE46YiME26rmUX5KSNTm9N2IZA8jz/sF
 Xz2ISQQYEQIACQUCQUSfRwIbDAAKCRBAl26vQ30FtdxYAJsFjU+xbex7gevyGQ2/
-mhqidES4MwCggqQyo+w1Twx6DKLF+3rF5nf1F3Q=
-=2m5N
+mhqidES4MwCggqQyo+w1Twx6DKLF+3rF5nf1F3SZAg0ET62BeAEQAN+IvUo0UdPg
+fgPDQ5H0t6ZHx5uwWX5v0TjgikaGBZgO5+PSBoz9QnVOLdsd9FPf1VVnpy/U/iZD
+LRucAoVtjP/Cj4aHOMFa2fp1OFi/uf4ovxum1IJeCDVrp6fx0IIgD+nC1LZS3+Dg
+S7pnjrt29g2UyAKq+D6msoitd/mJuKjjyPcAW93V0MmXZwd/K443fn/ze9cpfPQU
++iFDs3uQ98j6quUYFgZYXML9AQaN7frRDZij6t8yjIMReY+yhlWp/sQTyCN+deJG
+qbP8GDlhBvluCcZssaIda2NL4AIh0tSr+H6OVKnnuPDyhCS0yHbFUxfi60MzRQQ1
+5mc+WVUlKVHRv5mZnPulp5JqvxjGfjCw2UvsZlulbkD9aZyZZ+4xig+EGjkWrVXb
++yIo1TdQq5/Uof5fSnWhnig5xnZtLRmHdgQbwhBx70F96urhAwqx6Rwb0gpLpYEh
+TsHBoSUjYgsPSBLC7wrO81IR4gmFhKwEgTOtbEgFeg3YAL08KqpeRaUjlev/zpFa
+WUHcKyg/AR87wIslbYuVdN6f8WSrjBP5ql2Ed6JaJKyr8nk4R9/SsocFDd8rt/JW
+5U2skVvYKiloEvILFO6m/GzXraONQ2im3Rzs6o0Gg+hShUUDFRKl4TADDrGszm9E
+7IsxJ6H9idO5HLxa+JFqlkJijqdpMJjnABEBAAG0QlVidW50dSBBcmNoaXZlIEF1
+dG9tYXRpYyBTaWduaW5nIEtleSAoMjAxMikgPGZ0cG1hc3RlckB1YnVudHUuY29t
+PokCOAQTAQIAIgUCT62BeAIbAwYLCQgHAwIGFQgCCQoLBBYCAwECHgECF4AACgkQ
+O0/mrMCyHzJdfhAAkdR0rp5gzIlysU/fIpe1RhAylodEz9+Wipm04WGWZwtUyAE0
+6vR4u8FTQlxnJmkcy9lyJMMExZfwi0JhWNF6N/QrSU+8cdEZoTu3okdVQJ7Oc1sM
+yc49hXCVUl1ks5ro+YTlZdVemTy5MDy+bpE7atLbe8TtTSlCVX7UZVcxYfhkuNpC
+z9ObvB29HF6pNu184R4cYuOayiHR6sd/MxXjAD/1mrzpbO4lLUfFdHo5gMLf9pBf
+sLFhPUxDETD885uce2SXc9ExZ1Nbt9JC26URfOmvb8kJ6/ox9zxTLRoPeOeD1vJW
+T0al00USMaBpSqOrJmiy/ABnj92ZGOYwSJtd41QYLwd5YLdY5VXwv8OID6aImXA+
+/A+IDVm4oEjkDxUXSs0dbtBWwbyRD48MeBF2yaGnNJGDKQ3U+ArpTFJwpfwuo0oK
+0qm4Q8CmRrsVDW7gGhkqOOkGFjVHhOl8WQwh7upbxd+qho/32kQPfFdyHbMVE0eK
+00mv7JAkfjP+j7ZS+dMDaeJRMeUVIIGhTUy9KrU3YnepTqhHZw5gnhnGpbIKh5BH
+XHxo+cuVyfiV7odTtOhxhsdoiZwi3uqcbg2LQ5Y/iCISGM6mDG2taCXfqZ25++uL
+DJr4QdfOffoS9D075ubd/JquyeE97TWuWxHGoGIrUk7D+DgaelfyIsYRfVU=
+=/3oq
 -----END PGP PUBLIC KEY BLOCK-----
 EOF
-
-# Replace with the branch of Node.js or io.js you want to install:
-# node_6.x, node_8.x, etc...
-readonly node_version="node_10.x"
-
-if is_private; then
-    info "found intranet host: apt.realtime.cxm"
-    readonly realtime_robotics_url="http://apt.realtime.cxm/apt/realtime-robotics/${distribution}"
-    info "realtime_robotics_url: ${realtime_robotics_url}"
-    read_into_generated "${realtime_robotics_url}" <<EOF
-deb     ${realtime_robotics_url} ${distribution} realtime-robotics
-deb-src ${realtime_robotics_url} ${distribution} realtime-robotics
-EOF
-
-    # Don't install the apt preferences yet. As of this writing, the only
-    # patched package we need (orocos-kdl) has a later version string than
-    # that available from upstream. To put a fine point on it, we don't
-    # need to force a downgrade to get our own stuff. -- neil 2019.11.27
-    if false; then
-        readonly realtime_robotics_priority="$(etc_apt_preferences_d)/realtime-robotics-priority"
-        info "installing ${realtime_robotics_priority}"
-        cat >"${realtime_robotics_priority}" <<EOF
-# ${realtime_robotics_priority}
-#
-# Prefer our private repository component over everything else --- even if it
-# means downgrading.
-#
-# https://wiki.debian.org/AptPreferences
-# https://manpages.debian.org/stretch/apt/apt_preferences.5.en.html
-Package: *
-Pin: release c=realtime-robotics
-Pin-Priority: 1001
-EOF
-    fi
-
-    readonly node_url="http://apt.realtime.cxm/apt/${node_version}/${distribution}"
-    readonly ros_url="http://apt.realtime.cxm/apt/ros/${distribution}"
-    if grep "${this_arch}" "${ubuntu_ports_arch_list}"; then
-        readonly ubuntu_url="http://apt.realtime.cxm/apt/ubuntu-ports/${distribution}"
-    else
-        readonly ubuntu_url="http://apt.realtime.cxm/apt/ubuntu/${distribution}"
-    fi
+if [ "private" = "${use_network:-public}" ]; then
+    readonly ubuntu_repo_uri="http://apt.realtime.cxm/apt/ubuntu/${distribution}"
 else
-    warning "missing intranet host: apt.realtime.cxm"
-    readonly node_url="https://deb.nodesource.com/${node_version}"
-    readonly ros_url="http://packages.ros.org/ros/ubuntu"
-    if grep "${this_arch}" "${ubuntu_ports_arch_list}"; then
-        readonly ubuntu_url="http://ports.ubuntu.com/ubuntu-ports"
-    else
-        readonly ubuntu_url="http://archive.ubuntu.com/ubuntu"
-    fi
+    readonly ubuntu_repo_uri="http://archive.ubuntu.com/ubuntu"
 fi
-
-info "node_url: ${node_url}"
-read_into_generated "${node_url}" <<EOF
-deb     ${node_url} ${distribution} main
-deb-src ${node_url} ${distribution} main
+readonly ubuntu_atyp_list="$(mktemp -t ubuntu_atyp_list.XXXXXX)"
+cat >"${ubuntu_atyp_list}" <<'EOF'
+deb
+deb-src
 EOF
-
-info "ros_url: ${ros_url}"
-read_into_generated "${ros_url}" <<EOF
-deb     ${ros_url} ${distribution} main
-deb-src ${ros_url} ${distribution} main
+readonly ubuntu_dist_list="$(mktemp -t ubuntu_dist_list.XXXXXX)"
+cat >"${ubuntu_dist_list}" <<EOF
+${distribution}
+${distribution}-backports
+${distribution}-security
+${distribution}-updates
 EOF
-
-info "ubuntu_url: ${ubuntu_url}"
-read_into_generated "${ubuntu_url}" <<EOF
-deb     ${ubuntu_url} ${distribution} main restricted universe multiverse
-deb     ${ubuntu_url} ${distribution}-backports main restricted universe multiverse
-deb     ${ubuntu_url} ${distribution}-security main restricted universe multiverse
-deb     ${ubuntu_url} ${distribution}-updates main restricted universe multiverse
-
-deb-src ${ubuntu_url} ${distribution} main restricted universe multiverse
-deb-src ${ubuntu_url} ${distribution}-backports main restricted universe multiverse
-deb-src ${ubuntu_url} ${distribution}-security main restricted universe multiverse
-deb-src ${ubuntu_url} ${distribution}-updates main restricted universe multiverse
-
+readonly ubuntu_comp_list="$(mktemp -t ubuntu_comp_list.XXXXXX)"
+cat >"${ubuntu_comp_list}" <<'EOF'
+main
+restricted
+universe
+multiverse
 EOF
+setup_apt_list \
+    "${ubuntu_repo_uri}" \
+    "${ubuntu_atyp_list}" \
+    "${ubuntu_dist_list}" \
+    "${ubuntu_comp_list}"
+
+##############
+# UBUNTU END #
+##############
 
 # proactive protection against a bad proxy
 #
