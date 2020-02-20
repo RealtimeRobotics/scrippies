@@ -319,9 +319,6 @@ nZWf
 EOF
 if [ "private" = "${use_network:-public}" ]; then
     readonly realtime_robotics_repo_uri="http://apt.realtime.cxm/apt/realtime-robotics/${distribution}"
-else
-    # THERE IS NO PUBLIC REPOSITORY
-    readonly realtime_robotics_repo_uri=""
 fi
 readonly realtime_robotics_atyp_list="$(mktemp -t realtime_robotics_atyp_list.XXXXXX)"
 cat >"${realtime_robotics_atyp_list}" <<'EOF'
@@ -370,10 +367,6 @@ RzbmV95JXeFAGjXM5yH6FTxbzGdH/IaXN1ASMMZQedU=
 EOF
 if [ "private" = "${use_network:-public}" ]; then
     readonly freecad_repo_uri="http://apt.realtime.cxm/apt/freecad/${distribution}"
-else
-    # DON'T USE THE PUBLIC REPOSITORY
-    readonly freecad_repo_uri=""
-    # readonly freecad_repo_uri="http://ppa.launchpad.net/freecad-maintainers/occt-releases/ubuntu"
 fi
 readonly freecad_atyp_list="$(mktemp -t freecad_atyp_list.XXXXXX)"
 cat >"${freecad_atyp_list}" <<'EOF'
