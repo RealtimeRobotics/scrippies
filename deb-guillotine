@@ -81,7 +81,7 @@ deb_guillotine() {
         find . -type d -empty -print -delete
 
         # rebuild Debian binary package
-        dpkg-deb --build . "${deb_file}"
+        fakeroot dpkg-deb --build . "${deb_file}"
     )
 }
 
