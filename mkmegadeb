@@ -126,7 +126,7 @@ apt_uninstall() {
     apt list --installed \
         | cut -d/ -f1 \
         | grep -Fxf "$1" \
-        | xargs -r apt-get -yqo APT::Sandbox::User="$(whoami)" remove
+        | xargs -r apt-get -yqo APT::Sandbox::User="$(whoami)" purge
 }
 
 ################################################################################
