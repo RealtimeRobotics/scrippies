@@ -10,10 +10,10 @@ readonly tmpdir="$(mktemp -dt "${whatami}.XXXXXX")"
 
 readonly default_bump="patch"
 
-log() { echo "${whatami}[$$]: $@" >&2; }
-error() { log "ERROR: $@"; }
-warning() { log "WARNING: $@"; }
-info() { log "INFO: $@"; }
+log() { echo "${whatami}[$$]: $*" >&2; }
+error() { log "ERROR: $*"; }
+warning() { log "WARNING: $*"; }
+info() { log "INFO: $*"; }
 
 die() {
     error "$@"
@@ -22,7 +22,7 @@ die() {
 }
 
 cleanup() {
-    local status="$?"
+    status="$?"
     rm -rf "${tmpdir}" || true
     return "${status}"
 }
@@ -70,11 +70,11 @@ while [ 0 -lt "$#" ]; do
             exit "$?"
             ;;
         -C)
-            if ! [ -n "${2:-}" ]; then
+            if [ -z "${2:-}" ]; then
                 die "missing argument: $1"
             fi
             catkin_ws="$(readlink -f "$2")"
-            if ! [ -n "${catkin_ws}" ]; then
+            if [ -z "${catkin_ws}" ]; then
                 die "missing path: $2"
             fi
             if ! [ -d "${catkin_ws}" ]; then
@@ -150,19 +150,19 @@ readonly old_patch="$(echo "${old_triplet}" | cut -d. -f3)"
 
 case "${bump}" in
     major)
-        readonly new_major="$((${old_major} + 1))"
+        readonly new_major="$((old_major + 1))"
         readonly new_minor="0"
         readonly new_patch="0"
         ;;
     minor)
         readonly new_major="${old_major}"
-        readonly new_minor="$((${old_minor} + 1))"
+        readonly new_minor="$((old_minor + 1))"
         readonly new_patch="0"
         ;;
     patch)
         readonly new_major="${old_major}"
         readonly new_minor="${old_minor}"
-        readonly new_patch="$((${old_patch} + 1))"
+        readonly new_patch="$((old_patch + 1))"
         ;;
     *)
         die "bad bump: ${bump}"
@@ -187,7 +187,8 @@ if ! [ "true" = "${git_commit:-false}" ]; then
 fi
 
 readonly new_triplet="${new_major}.${new_minor}.${new_patch}"
-export GIT_AUTHOR_DATE="$(date -uIs)"
+GIT_AUTHOR_DATE="$(date -uIseconds)"
+export GIT_AUTHOR_DATE
 export GIT_COMMITTER_DATE="${GIT_AUTHOR_DATE}"
 if [ "true" = "${dry_run:-false}" ]; then
     git -C "${catkin_ws}" commit --all --message="bump version ${new_triplet}" --dry-run || true
