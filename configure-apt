@@ -5,17 +5,16 @@
 set -eu
 
 readonly this="$(readlink -f "$0")"
-readonly here="$(dirname "${this}")"
 readonly whatami="$(basename "${this}")"
 readonly tmpdir="$(mktemp -dt "${whatami}.XXXXXX")"
 
-log() { echo "${whatami}[$$]: $@" >&2; }
-error() { log "ERROR: $@"; }
-warning() { log "WARNING: $@"; }
-info() { log "INFO: $@"; }
+log() { echo "${whatami}[$$]: $*" >&2; }
+error() { log "ERROR: $*"; }
+warning() { log "WARNING: $*"; }
+info() { log "INFO: $*"; }
 
 die() {
-    error "$@"
+    error "$*"
     usage >&2
     exit 1
 }
@@ -61,7 +60,7 @@ EOF
 # 3.282 Portable Filename Character Set
 # https://pubs.opengroup.org/onlinepubs/9699919799/basedefs/V1_chap03.html#tag_03_282
 filenamify() {
-    printf "$@" | tr -sc '[:alnum:]._-' '_'
+    printf '%s' "$*" | tr -sc '[:alnum:]._-' '_'
 }
 
 apt_config_path() {
@@ -84,51 +83,22 @@ etc_apt_preferences_d() {
     apt-config shell _ Dir _ Dir::Etc _ Dir::Etc::preferencesparts | apt_config_path
 }
 
-# read stdin (assumed to be apt sources list file body) into the given apt
-# sources list file
-#
-# $1 : listfile to be written
-read_into_listfile() {
-    info "installing: $1"
-    if [ -f "$1" ]; then
-        warning "file exists: $1"
-        warning "$(mv -v $1 $1.save)"
-    fi
-    cat >"$1" <<EOF
-# $1
-#
-# This is a generated apt sources list file.
-#
-# https://wiki.debian.org/SourcesList
-#
-# generator : ${this}
-# user      : $(id)
-# uname     : $(uname -a)
-# date      : $(date -u +"%Y-%m-%dT%H:%M:%SZ")
-
-EOF
-    cat >>"$1"
-}
-
-# read stdin (assumed to be apt sources list file body) into a generated apt
-# sources list file named for the given url
-#
-# $1 : url from which to generate apt sources list file name
-read_into_generated() {
-    read_into_listfile "$(etc_apt_sources_list_d)/$(filenamify "$1").list"
-}
-
 detect_distribution() {
+    # shellcheck disable=SC2039
+    local result=""
     if command -v lsb_release >/dev/null 2>&1; then
-        lsb_release --short --codename
-        return 0
+        if result="$(lsb_release --short --codename)"; then
+            echo "${result}"
+            return 0
+        else
+            warning "FAILURE: lsb_release --short --codename"
+        fi
     else
-        warning "missing program: lsb_release"
+        warning "missing command: lsb_release"
     fi
     if [ -f /etc/os-release ]; then
-        . /etc/os-release
-        if [ -n "${UBUNTU_CODENAME:-}" ]; then
-            echo "${UBUNTU_CODENAME}"
+        if result="$( . /etc/os-release; echo "${UBUNTU_CODENAME:-}")"; then
+            echo "${result}"
             return 0
         else
             warning "/etc/os-release: undefined UBUNTU_CODENAME"
@@ -149,10 +119,11 @@ vet_force_network() {
             echo "$1"
             return 0
             ;;
-        *) break ;;
+        *)
+            error "bad force_network: $1"
+            return 1
+            ;;
     esac
-    error "bad force_network: $1"
-    return 1
 }
 
 # Take some things that describe an apt repository. Write a generated apt
@@ -163,16 +134,23 @@ vet_force_network() {
 # $3 : dist_list ; https://wiki.debian.org/SourcesList#Distribution
 # $4 : comp_list ; https://wiki.debian.org/SourcesList#Component
 setup_apt_list() {
+    # shellcheck disable=SC2039
     local repo_uri="$1"
+    # shellcheck disable=SC2039
     local atyp_list="$2"
+    # shellcheck disable=SC2039
     local dist_list="$3"
+    # shellcheck disable=SC2039
     local comp_list="$4"
-    # list file is named for the uri it enables
-    local apt_list_file="$(etc_apt_sources_list_d)/$(filenamify "${repo_uri}").list"
+
+    # list file is named for the uri it references
+    # shellcheck disable=SC2039
+    local apt_list_file=""
+    apt_list_file="$(etc_apt_sources_list_d)/$(filenamify "${repo_uri}").list"
     info "installing: ${apt_list_file}"
     if [ -f "${apt_list_file}" ]; then
         warning "file exists: ${apt_list_file}"
-        warning "$(mv -v ${apt_list_file} ${apt_list_file}.save)"
+        warning "$(mv -v "${apt_list_file}" "${apt_list_file}.save")"
     fi
     # write header
     cat >"${apt_list_file}" <<EOF
@@ -190,10 +168,14 @@ setup_apt_list() {
 EOF
     # write body
     # Make sure atyp and dist are padded to the longest member
-    local atyp_width="$(wc -L <"${atyp_list}")"
-    local dist_width="$(wc -L <"${dist_list}")"
-    while read atyp; do
-        while read dist; do
+    # shellcheck disable=SC2039
+    local atyp_width=""
+    atyp_width="$(wc -L <"${atyp_list}")"
+    # shellcheck disable=SC2039
+    local dist_width=""
+    dist_width="$(wc -L <"${dist_list}")"
+    while read -r atyp; do
+        while read -r dist; do
             printf "%-${atyp_width}s %s %-${dist_width}s %s\n" \
                 "${atyp}" \
                 "${repo_uri}" \
@@ -226,7 +208,7 @@ while getopts ":hf:" opt; do
         \?) die "bad option: -${OPTARG}" ;;
     esac
 done
-shift "$((${OPTIND} - 1))"
+shift "$((OPTIND - 1))"
 
 case "$#" in
     0)
@@ -258,145 +240,136 @@ else
     warning "discovered use_network: ${use_network}"
 fi
 
-###########################
-# REALTIME-ROBOTICS BEGIN #
-###########################
-info "installing realtime robotics pubkey: 0xd232bf1c54e0f4b1f1d115920c2e51a6a3490b91"
+################################################################################
+
+#######################################
+# ################################### #
+# # LAUNCHPAD PPA REALTIME-ROBOTICS # #
+# ################################### #
+#######################################
+
+info "installing Launchpad PPA for realtime-robotics pubkey: 0xae0f78ce556b80ab48ce556f208dac2d8a68278a"
 apt-key add --verbose - <<'EOF'
 -----BEGIN PGP PUBLIC KEY BLOCK-----
 
-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
-nZWf
-=YX62
+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
+/NK2S1RR5roDbcTG7xY2rw==
+=/ymJ
 -----END PGP PUBLIC KEY BLOCK-----
 EOF
+
+################################################################################
+
+#######################################
+# LAUNCHPAD PPA REALTIME-ROBOTICS ROS #
+#######################################
+
 if [ "private" = "${use_network:-public}" ]; then
-    readonly realtime_robotics_repo_uri="http://apt.realtime.cxm/apt/realtime-robotics/${distribution}"
-fi
-readonly realtime_robotics_atyp_list="$(mktemp -t realtime_robotics_atyp_list.XXXXXX)"
-cat >"${realtime_robotics_atyp_list}" <<'EOF'
-deb
-deb-src
-EOF
-readonly realtime_robotics_dist_list="$(mktemp -t realtime_robotics_dist_list.XXXXXX)"
-cat >"${realtime_robotics_dist_list}" <<EOF
-${distribution}
-EOF
-readonly realtime_robotics_comp_list="$(mktemp -t realtime_robotics_comp_list.XXXXXX)"
-cat >"${realtime_robotics_comp_list}" <<'EOF'
-realtime-robotics
-EOF
-if [ -n "${realtime_robotics_repo_uri:-}" ]; then
-    setup_apt_list \
-        "${realtime_robotics_repo_uri}" \
-        "${realtime_robotics_atyp_list}" \
-        "${realtime_robotics_dist_list}" \
-        "${realtime_robotics_comp_list}"
+    readonly rtr_ros_repo_uri="http://apt.realtime.cxm/apt/realtime-robotics/ros/${distribution}"
 else
-    warning "skipping realtime-robotics repository"
+    readonly rtr_ros_repo_uri="http://ppa.launchpad.net/realtime-robotics/ros/ubuntu"
 fi
-#########################
-# REALTIME-ROBOTICS END #
-#########################
-
-#################
-# FREECAD BEGIN #
-#################
-info "installing freecad pubkey: 0x83193aa3b52ff6fcf10a1bbf005eae8119bb5bca"
-apt-key add --verbose - <<'EOF'
------BEGIN PGP PUBLIC KEY BLOCK-----
-Version: GnuPG v1
-
-mI0ETYF+BAEEAK1n4CPNzdG/rTNvteUkHOiSikl07GJl7jh8RjL4T2BA3g2J0M0g
-x20gOfc2Srbmg676cdf2kIzhfVPbjvWJnDYsFS1BOa0ZsKb0xN6lZzMU2lhmPMgF
-jJJk94BqeLlxr9wSqmOkR8X3yDtNWbZ+5xO1wDUP4GDZcCwesVsWfdXZABEBAAG0
-JUxhdW5jaHBhZCBQUEEgZm9yIEZyZWVDQUQgbWFpbnRhaW5lcnOIuAQTAQIAIgUC
-TYF+BAIbAwYLCQgHAwIGFQgCCQoLBBYCAwECHgECF4AACgkQAF6ugRm7W8oktwP+
-Nzk9OEg3kl8fNd9JeTWrw2UnisfPOIV7HTATpLqnXZQOQ+Q7QjsRL6yRMj+U6OWa
-9pgDrljJyg77DFCcHipCrR5LiXdxzzK2Z2wbStxsS2U3v7HJaXw4gmYAGyahswLa
-RzbmV95JXeFAGjXM5yH6FTxbzGdH/IaXN1ASMMZQedU=
-=3tnf
------END PGP PUBLIC KEY BLOCK-----
-EOF
-if [ "private" = "${use_network:-public}" ]; then
-    readonly freecad_repo_uri="http://apt.realtime.cxm/apt/freecad/${distribution}"
-fi
-readonly freecad_atyp_list="$(mktemp -t freecad_atyp_list.XXXXXX)"
-cat >"${freecad_atyp_list}" <<'EOF'
+readonly rtr_ros_atyp_list="$(mktemp -t rtr_ros_atyp_list.XXXXXX)"
+cat >"${rtr_ros_atyp_list}" <<'EOF'
 deb
 deb-src
 EOF
-readonly freecad_dist_list="$(mktemp -t freecad_dist_list.XXXXXX)"
-cat >"${freecad_dist_list}" <<EOF
+readonly rtr_ros_dist_list="$(mktemp -t rtr_ros_dist_list.XXXXXX)"
+cat >"${rtr_ros_dist_list}" <<EOF
 ${distribution}
 EOF
-readonly freecad_comp_list="$(mktemp -t freecad_comp_list.XXXXXX)"
-cat >"${freecad_comp_list}" <<'EOF'
+readonly rtr_ros_comp_list="$(mktemp -t rtr_ros_comp_list.XXXXXX)"
+cat >"${rtr_ros_comp_list}" <<'EOF'
 main
 EOF
-if [ -n "${freecad_repo_uri:-}" ]; then
-    setup_apt_list \
-        "${freecad_repo_uri}" \
-        "${freecad_atyp_list}" \
-        "${freecad_dist_list}" \
-        "${freecad_comp_list}"
-else
-    warning "skipping freecad repository"
-fi
-###############
-# FREECAD END #
-###############
+setup_apt_list \
+    "${rtr_ros_repo_uri}" \
+    "${rtr_ros_atyp_list}" \
+    "${rtr_ros_dist_list}" \
+    "${rtr_ros_comp_list}"
 
-##############
-# NODE BEGIN #
-##############
+################################################################################
+
+########################################
+# LAUNCHPAD PPA REALTIME-ROBOTICS OCCT #
+########################################
+
+if [ "private" = "${use_network:-public}" ]; then
+    readonly rtr_occt_repo_uri="http://apt.realtime.cxm/apt/realtime-robotics/occt/${distribution}"
+else
+    readonly rtr_occt_repo_uri="http://ppa.launchpad.net/realtime-robotics/occt/ubuntu"
+fi
+readonly rtr_occt_atyp_list="$(mktemp -t rtr_occt_atyp_list.XXXXXX)"
+cat >"${rtr_occt_atyp_list}" <<'EOF'
+deb
+deb-src
+EOF
+readonly rtr_occt_dist_list="$(mktemp -t rtr_occt_dist_list.XXXXXX)"
+cat >"${rtr_occt_dist_list}" <<EOF
+${distribution}
+EOF
+readonly rtr_occt_comp_list="$(mktemp -t rtr_occt_comp_list.XXXXXX)"
+cat >"${rtr_occt_comp_list}" <<'EOF'
+main
+EOF
+setup_apt_list \
+    "${rtr_occt_repo_uri}" \
+    "${rtr_occt_atyp_list}" \
+    "${rtr_occt_dist_list}" \
+    "${rtr_occt_comp_list}"
+
+################################################################################
+
+########
+# NODE #
+########
+
 info "installing node pubkey: 0x9fd3b784bc1c6fc31a8a0a1c1655a0ab68576280"
 apt-key add --verbose - <<'EOF'
 -----BEGIN PGP PUBLIC KEY BLOCK-----
@@ -475,13 +448,13 @@ setup_apt_list \
     "${node_atyp_list}" \
     "${node_dist_list}" \
     "${node_comp_list}"
-############
-# NODE END #
-############
 
-#############
-# ROS BEGIN #
-#############
+################################################################################
+
+#######
+# ROS #
+#######
+
 info "installing ROS pubkey: 0xc1cf6e31e6bade8868b172b4f42ed6fbab17c654"
 apt-key add --verbose - <<'EOF'
 -----BEGIN PGP PUBLIC KEY BLOCK-----
@@ -538,13 +511,13 @@ setup_apt_list \
     "${ros_atyp_list}" \
     "${ros_dist_list}" \
     "${ros_comp_list}"
-###########
-# ROS END #
-###########
 
-################
-# UBUNTU BEGIN #
-################
+################################################################################
+
+##########
+# UBUNTU #
+##########
+
 info "installing ubuntu pubkey(s)"
 apt-key add --verbose - <<'EOF'
 -----BEGIN PGP PUBLIC KEY BLOCK-----
