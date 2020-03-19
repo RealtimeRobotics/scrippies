@@ -97,7 +97,10 @@ detect_distribution() {
         warning "missing command: lsb_release"
     fi
     if [ -f /etc/os-release ]; then
-        if result="$( . /etc/os-release; echo "${UBUNTU_CODENAME:-}")"; then
+        if result="$(
+            . /etc/os-release
+            echo "${UBUNTU_CODENAME:-}"
+        )"; then
             echo "${result}"
             return 0
         else
@@ -336,33 +339,33 @@ setup_apt_list \
 
 ################################################################################
 
-########################################
-# LAUNCHPAD PPA REALTIME-ROBOTICS OCCT #
-########################################
+###########################################
+# LAUNCHPAD PPA REALTIME-ROBOTICS FREECAD #
+###########################################
 
 if [ "private" = "${use_network:-public}" ]; then
-    readonly rtr_occt_repo_uri="http://apt.realtime.cxm/apt/realtime-robotics/occt/${distribution}"
+    readonly rtr_freecad_repo_uri="http://apt.realtime.cxm/apt/realtime-robotics/freecad/${distribution}"
 else
-    readonly rtr_occt_repo_uri="http://ppa.launchpad.net/realtime-robotics/occt/ubuntu"
+    readonly rtr_freecad_repo_uri="http://ppa.launchpad.net/realtime-robotics/freecad/ubuntu"
 fi
-readonly rtr_occt_atyp_list="$(mktemp -t rtr_occt_atyp_list.XXXXXX)"
-cat >"${rtr_occt_atyp_list}" <<'EOF'
+readonly rtr_freecad_atyp_list="$(mktemp -t rtr_freecad_atyp_list.XXXXXX)"
+cat >"${rtr_freecad_atyp_list}" <<'EOF'
 deb
 deb-src
 EOF
-readonly rtr_occt_dist_list="$(mktemp -t rtr_occt_dist_list.XXXXXX)"
-cat >"${rtr_occt_dist_list}" <<EOF
+readonly rtr_freecad_dist_list="$(mktemp -t rtr_freecad_dist_list.XXXXXX)"
+cat >"${rtr_freecad_dist_list}" <<EOF
 ${distribution}
 EOF
-readonly rtr_occt_comp_list="$(mktemp -t rtr_occt_comp_list.XXXXXX)"
-cat >"${rtr_occt_comp_list}" <<'EOF'
+readonly rtr_freecad_comp_list="$(mktemp -t rtr_freecad_comp_list.XXXXXX)"
+cat >"${rtr_freecad_comp_list}" <<'EOF'
 main
 EOF
 setup_apt_list \
-    "${rtr_occt_repo_uri}" \
-    "${rtr_occt_atyp_list}" \
-    "${rtr_occt_dist_list}" \
-    "${rtr_occt_comp_list}"
+    "${rtr_freecad_repo_uri}" \
+    "${rtr_freecad_atyp_list}" \
+    "${rtr_freecad_dist_list}" \
+    "${rtr_freecad_comp_list}"
 
 ################################################################################
 
