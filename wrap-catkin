@@ -5,7 +5,6 @@
 set -euvx
 
 readonly this="$(readlink -f "$0")"
-readonly here="$(dirname "${this}")"
 readonly whatami="$(basename "${this}")"
 readonly tmpdir="$(mktemp -dt "${whatami}.XXXXXX")"
 
