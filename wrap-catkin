@@ -79,7 +79,7 @@ catkin "$@" \
     -DCMAKE_VERBOSE_MAKEFILE=true \
     -- \
     --make-args \
-    "${MAKEFLAGS:- --jobs=$((1 + $(nproc) >> 1)) --load-average=$(nproc)}" \
+    "${MAKEFLAGS:- --jobs=$(((1 + $(nproc)) / 2)) --load-average=$(nproc)}" \
     --
 
 exit "$?"
