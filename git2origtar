@@ -27,7 +27,7 @@ cleanup() {
 
 usage() {
     cat <<EOF
-Usage: $0 [OPTION]...
+Usage: $0 [OPTION]... [-- TAR_OPTION...]
 From a git checkout, create an orig tarball and print its path.
 
 Options
@@ -45,6 +45,8 @@ Examples:
     \$ $0 -C ~/code/rapidplan
 
     \$ $0 -C ~/code/rapidplan -o rapidplan.orig.tar
+
+    \$ $0 -C ~/code/kdl -V \$(git -C ~/code/kdl describe --long --always --tags) -- --xform='s,^\./,./src/,'
 
 EOF
 }
@@ -322,7 +324,7 @@ info "mtime: ${mtime} ($(date -uIs -d "${mtime}"))"
     find . ! -type d \
         | sort \
         | sed 's/./\\&/g' \
-        | xargs tar \
+        | xargs tar "$@" \
             --numeric-owner \
             --owner=0 \
             --group=0 \
