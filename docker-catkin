@@ -38,8 +38,8 @@ Options:
 
     -h                 print usage and exit
     -C CATKIN_WS       run as if started in CATKIN_WS (default: \$PWD)
-    -D DISTRIBUTION    ubuntu distribution (default: ${default_distribution})
-    -R ROS_DISTRO      ros distribution (default: ${default_ros_distro})
+    -D DISTRIBUTION    ubuntu distribution (default: inferred/detected)
+    -R ROS_DISTRO      ros distribution (default: inferred/detected)
 
 Examples:
 
@@ -47,16 +47,15 @@ Examples:
 
     \$ $0 -C \$HOME/catkin_ws
 
-    \$ $0 -C \$HOME/catkin_ws -D ${default_distribution}
+    \$ $0 -C \$HOME/catkin_ws -D bionic
 
-    \$ $0 -C \$HOME/catkin_ws -D ${default_distribution} -R ${default_ros_distro}
+    \$ $0 -C \$HOME/catkin_ws -D bionic -R melodic
 
 EOF
 }
 
 infer_distribution() {
-    local result=""
-    case "$1" in
+    case "${ros_distro:-}" in
         kinetic)
             echo "xenial"
             return 0
@@ -65,15 +64,19 @@ infer_distribution() {
             echo "bionic"
             return 0
             ;;
-        *) ;;
-
+        "")
+            error "undefined ros_distro"
+            return 1
+            ;;
+        *)
+            error "unknown ros_distro: ${ros_distro}"
+            return 1
+            ;;
     esac
-    error "unknown ros_distro: $1"
-    return 1
 }
 
 infer_ros_distro() {
-    case "$1" in
+    case "${distribution:-}" in
         xenial)
             echo "kinetic"
             return 0
@@ -82,10 +85,56 @@ infer_ros_distro() {
             echo "melodic"
             return 0
             ;;
-        *) ;;
+        "")
+            error "undefined distribution"
+            return 1
+            ;;
+        *)
+            error "unknown distribution: ${distribution}"
+            return 1
+            ;;
     esac
-    error "unknown distribution: $1"
-    return 1
+}
+
+detect_distribution() {
+    if ! [ -f /etc/os-release ]; then
+        error "missing file: /etc/os-release"
+        return 1
+    fi
+    # shellcheck disable=SC1091
+    . /etc/os-release
+    if [ -z "${VERSION_CODENAME:-}" ]; then
+        error "undefined VERSION_CODENAME"
+        return 1
+    fi
+    echo "${VERSION_CODENAME}"
+}
+
+# take nothing and detect the installed ros_distro; print ros_distro on
+# success; print nothing on failure
+detect_ros_distro() {
+    if ! [ -d /opt/ros ]; then
+        error "missing directory: /opt/ros"
+        return 1
+    fi
+    # shellcheck disable=SC2039
+    local ros_distro_list=""
+    ros_distro_list="$(mktemp -t ros.distro.list.XXXXXX)"
+    find /opt/ros -maxdepth 1 -mindepth 1 -type d -exec basename {} \; >"${ros_distro_list}"
+    case "$(wc -l <"${ros_distro_list}")" in
+        0)
+            error "missing ROS installation"
+            return 1
+            ;;
+        1)
+            cat "${ros_distro_list}"
+            return 0
+            ;;
+        *)
+            error "multiple ROS installations"
+            return 1
+            ;;
+    esac
 }
 
 # Print a sha1 for the current state of the checkout.
@@ -182,7 +231,7 @@ catkin_verb() {
         -DCMAKE_VERBOSE_MAKEFILE=true \
         -- \
         --make-args \
-        "${MAKEFLAGS:- --jobs=$((1 + $(nproc) >> 1)) --load-average=$(nproc)}" \
+        "${MAKEFLAGS:- --jobs=$((($(nproc)+1)/2)) --load-average=$(nproc)}" \
         --
 }
 
@@ -253,34 +302,6 @@ while getopts ":hC:D:R:" opt; do
 done
 shift "$((OPTIND - 1))"
 
-# distribution
-if [ -n "${distribution:-}" ]; then
-    info "distribution: ${distribution}"
-elif [ -n "${ros_distro:-}" ]; then
-    if ! distribution="$(infer_distribution "${ros_distro}")"; then
-        die "FAILURE: infer_distribution ${ros_distro}"
-    fi
-    readonly distribution="${distribution}"
-    warning "inferred distribution: ${distribution}"
-else
-    readonly distribution="${default_distribution}"
-    warning "defaulted distribution: ${distribution}"
-fi
-
-# ros_distro
-if [ -n "${ros_distro:-}" ]; then
-    info "ros_distro: ${ros_distro}"
-elif [ -n "${distribution:-}" ]; then
-    if ! ros_distro="$(infer_ros_distro "${distribution}")"; then
-        die "FAILURE: infer_ros_distro ${distribution}"
-    fi
-    readonly ros_distro="${ros_distro}"
-    warning "inferred ros_distro: ${ros_distro}"
-else
-    readonly ros_distro="${default_ros_distro}"
-    warning "defaulted ros_distro: ${ros_distro}"
-fi
-
 # catkin_ws
 if [ -n "${catkin_ws:-}" ]; then
     info "catkin_ws: ${catkin_ws}"
@@ -292,8 +313,44 @@ else
     warning "defaulting catkin_ws: ${catkin_ws}"
 fi
 
-readonly copy_catkin_ws="$(mktemp -dt copy_catkin_ws.XXXXXX)"
-dircopy "${catkin_ws}" "${copy_catkin_ws}"
+# distribution
+if [ -n "${distribution:-}" ]; then
+    info "distribution: ${distribution}"
+elif distribution="$(infer_distribution)"; then
+    readonly distribution="${distribution}"
+    warning "inferred distribution: ${distribution}"
+elif distribution="$(detect_distribution)"; then
+    readonly distribution="${distribution}"
+    warning "detected distribution: ${distribution}"
+else
+    die "failed to get, infer, and/or detect distribution"
+fi
+
+# ros_distro
+if [ -n "${ros_distro:-}" ]; then
+    info "ros_distro: ${ros_distro}"
+elif ros_distro="$(infer_ros_distro)"; then
+    readonly ros_distro="${ros_distro}"
+    warning "inferred ros_distro: ${ros_distro}"
+elif ros_distro="$(detect_ros_distro)"; then
+    readonly ros_distro="${ros_distro}"
+    warning "detected ros_distro: ${ros_distro}"
+else
+    die "failed to get, infer, and/or detect ros_distro"
+fi
+
+################################################################################
+
+if ! tty; then
+    # no tty, so abuse `script` to get one
+    # https://stackoverflow.com/questions/32910661/pretend-to-be-a-tty-in-bash-for-any-command/32981392#32981392
+    script -qfec "${this} -C ${catkin_ws} -D ${distribution} -R ${ros_distro}" /dev/null
+    exit "$?"
+fi
+
+########################
+# NOW RUNNING WITH TTY #
+########################
 
 if ! is_in_container; then
     # We build stuff under $TMPDIR. Sometimes, the build requires the
@@ -319,116 +376,129 @@ if ! is_in_container; then
     fi
     docker image inspect "${image_name}"
 
+    readonly host_memory_k="$(grep -Eom1 '[0-9]+' /proc/meminfo)"
     readonly docker_workdir="$(mktemp -ut docker_workdir.XXXXXX)"
     docker container run \
-        --env COPY_CATKIN_WS="${copy_catkin_ws}" \
+        --cpus "$((($(nproc) + 3) / 4))" \
+        --env CATKIN_WS="${catkin_ws}" \
         --env DEBCONF_NONINTERACTIVE_SEEN=true \
         --env DEBIAN_FRONTEND=noninteractive \
         --env DISTRIBUTION="${distribution}" \
         --env DOCKER_HOST_GID="$(id -g)" \
         --env DOCKER_HOST_UID="$(id -u)" \
         --env HERE="${here}" \
+        --env NO_COLOR="${NO_COLOR:-1}" \
         --env ROS_DISTRO="${ros_distro}" \
         --env SUDO_FORCE_REMOVE=yes \
+        --env TERM=dumb \
         --env THIS="${this}" \
         --interactive \
-        --mount type=bind,readonly,source="${copy_catkin_ws}",target="${copy_catkin_ws}" \
+        --memory "$((host_memory_k / 2))k" \
+        --memory-swap "${host_memory_k}k" \
+        --memory-swappiness 100 \
         --mount type=bind,readonly,source="${here}",target="${here}" \
         --mount type=bind,source="${PWD}",target="${docker_workdir}" \
+        --mount type=bind,source="${catkin_ws}",target="${catkin_ws}" \
+        --mount type=bind,source="${tmpdir}",target="${tmpdir}" \
         --rm \
+        --tty \
         --workdir "${docker_workdir}" \
-        "${image_name}" sh <<'EOF'
-set -euvx
-
-# maybe someday:
-#dpkg-divert --local --rename /bin/bash
-
-dpkg-divert --local --rename /usr/bin/git
-
-${HERE}/configure-apt
-apt-get -y update
-
-groupadd -g "${DOCKER_HOST_GID}" luser
-useradd \
-    --create-home \
-    --uid "${DOCKER_HOST_UID}" \
-    --gid "${DOCKER_HOST_GID}" \
-    --shell "$(command -v sh)" \
-    luser
-
-# STUPID ROS: rosdep invokes sudo apt-get to install things
-apt-get -y --no-install-recommends install sudo
-cat >/etc/sudoers.d/luser-apt-get <<LUSER_APT_GET
-luser $(hostname) = (root) NOPASSWD: $(command -v apt-get)
-LUSER_APT_GET
-
-nice -n19 su luser <<'SU_LUSER'
-set -euvx
-rosdep update --verbose
-# http://wiki.ros.org/rosdep#Install_dependency_of_all_packages_in_the_workspace
-rosdep install \
-    --default-yes \
-    --from-path "${COPY_CATKIN_WS}/src" \
-    --ignore-packages-from-source \
-    --verbose \
-    && true
-SU_LUSER
-
-# STUPID ROS: now de-sudo luser and uninstall sudo
-rm -vf /etc/sudoers.d/luser-apt-get
-
-# STUPID ROS: this used to be okay, then something with catkin happened
-# -- neil 2019.10.28
-if false; then
-    apt-get -y purge sudo
-    apt-get -y autoremove
-fi
-
-# because pcl_ros has too many shared objects
-pclros_config_cmake="/opt/ros/${ROS_DISTRO}/share/pcl_ros/cmake/pcl_rosConfig.cmake"
-if [ -f "${pclros_config_cmake}" ]; then
-    sed -r \
-        -i.backup \
-        -e 's,;/usr/include/vtk[[:alnum:].-]+,,g' \
-        -e 's,;/usr/lib(/x86_64-linux-gnu)?/libvtk[[:alnum:].-]+,,g' \
-        "${pclros_config_cmake}"
-    ! diff "${pclros_config_cmake}.backup" "${pclros_config_cmake}"
-fi
-
-# because gnu tar hates OverlayFS2
-if cmd_tar="$(command -v tar)"; then
-    if cmd_bsdtar="$(command -v bsdtar)"; then
-        dpkg-divert --local --rename "${cmd_tar}"
-        ln -vsf "${cmd_bsdtar}" "${cmd_tar}"
-    fi
-fi
-
-if command -v npm; then
-    "${HERE}/configure-npm"
-fi
-
-nice -n19 su luser <<'SU_LUSER'
-set -euvx
-${THIS} -C ${COPY_CATKIN_WS} -D ${DISTRIBUTION} -R ${ROS_DISTRO}
-SU_LUSER
-
-EOF
-
-    # hold off on this for now
-    if false; then
-        catkin_ws_pathfix "${docker_workdir}" "${PWD}"
-    fi
-
+        "${image_name}" sh -c "${this} -C ${catkin_ws} -D ${distribution} -R ${ros_distro}"
     exit "$?"
 fi
 
-env | sort
+############################
+# NOW INSIDE THE CONTAINER #
+############################
 
-catkin init --workspace "${copy_catkin_ws}"
-catkin config --workspace "${copy_catkin_ws}" --extend "/opt/ros/${ros_distro}" --install
-catkin clean --workspace "${copy_catkin_ws}" --yes
-catkin_verb build --workspace "${copy_catkin_ws}"
-catkin_verb run_tests --workspace "${copy_catkin_ws}"
+if [ 0 -eq "$(id -u)" ]; then
+    # running as root; set up for luser invocation
+
+    # maybe someday:
+    #dpkg-divert --local --rename /bin/bash
+
+    dpkg-divert --local --rename /usr/bin/git
+
+    # nuke existing apt state, configure apt, and re-populate apt state
+    find /etc/apt/sources.list.d /var/lib/apt/lists -type f \
+        -exec rm -vf /etc/apt/sources.list {} +
+    "${here}/configure-apt"
+    apt-get -y update
+
+    # For the packages that need it, we need to mung rosdep *BEFORE* the luser
+    # does a `rosdep update`. There's no good way to know which apt repository
+    # contains which packages that need rosdep fakery to masquerade as ROS
+    # packages -- we need _a priori_ knowledge to effect this "whitelist".
+
+    # Will wants freecad packages in rosdep
+    readonly freecad_pkg_list="$(mktemp -t freecad_pkg_list.XXXXXX)"
+    # https://www.debian.org/doc/manuals/debian-reference/ch02.en.html#_fetching_of_the_meta_data_for_the_package
+    find /var/lib/apt/lists -maxdepth 1 -type f \
+        -name "*freecad*_dists_${distribution}_*_binary-$(dpkg --print-architecture)_Packages*" \
+        -exec /usr/lib/apt/apt-helper cat-file {} + >"${freecad_pkg_list}"
+    sed -nri 's|^Package: ([[:graph:]]+)|\1|gp' "${freecad_pkg_list}"
+    sort -uo "${freecad_pkg_list}" "${freecad_pkg_list}"
+    cat -n "${freecad_pkg_list}" >&2
+    while read -r freecad_pkg; do
+        "${here}/configure-rosdep" "${freecad_pkg}"
+    done <"${freecad_pkg_list}"
+
+    # create luser account
+    groupadd -g "${DOCKER_HOST_GID}" luser
+    useradd -m -u"${DOCKER_HOST_UID}" -g"${DOCKER_HOST_GID}" -s"$(command -v sh)" luser
+
+    # STUPID ROS: rosdep invokes sudo apt-get to install things
+    apt-get -y --no-install-recommends install sudo
+    cat >/etc/sudoers.d/luser-apt-get <<LUSER_APT_GET
+luser $(hostname) = (root) NOPASSWD: $(command -v apt-get)
+LUSER_APT_GET
+
+    # http://wiki.ros.org/rosdep#Install_dependency_of_all_packages_in_the_workspace
+    nice -n19 su luser <<'SU_LUSER'
+set -euvx
+rosdep update --verbose
+rosdep install \
+    --default-yes \
+    --from-path "${CATKIN_WS}/src" \
+    --ignore-packages-from-source \
+    --verbose
+SU_LUSER
+
+    # STUPID ROS: now de-sudo luser
+    rm -vf /etc/sudoers.d/luser-apt-get
+
+    # because pcl_ros has too many shared objects
+    pclros_config_cmake="/opt/ros/${ros_distro}/share/pcl_ros/cmake/pcl_rosConfig.cmake"
+    if [ -f "${pclros_config_cmake}" ]; then
+        sed -r \
+            -i.backup \
+            -e 's,;/usr/include/vtk[[:alnum:].-]+,,g' \
+            -e 's,;/usr/lib(/x86_64-linux-gnu)?/libvtk[[:alnum:].-]+,,g' \
+            "${pclros_config_cmake}"
+        if diff "${pclros_config_cmake}.backup" "${pclros_config_cmake}"; then
+            warning: "FUTZING DID NOT CHANGE ANYTHING: ${pclros_config_cmake}"
+        fi
+    fi
+
+    if command -v npm; then
+        "${here}/configure-npm"
+    fi
+
+    nice -n19 su -c "${this} -C ${catkin_ws} -D ${distribution} -R ${ros_distro}" luser
+    exit "$?"
+fi
+
+########################
+# NOW RUNNING AS LUSER #
+########################
+
+env | sort
+rosdep update --verbose
+# catkin init --workspace "${catkin_ws}" --reset
+catkin config --workspace "${catkin_ws}" --extend "/opt/ros/${ros_distro}" --install
+catkin clean --workspace "${catkin_ws}" --yes
+catkin_verb build --workspace "${catkin_ws}"
+catkin_verb run_tests --workspace "${catkin_ws}"
 result=""
 (
     # because ROS stupidly expands undefined variables, but we still need to
@@ -436,16 +506,9 @@ result=""
     set +eu
     # shellcheck disable=SC1090
     . "/opt/ros/${ros_distro}/setup.sh"
-    catkin_test_results "${copy_catkin_ws}"
+    catkin_test_results "${catkin_ws}"
 ) && result="$?" || result="$?"
 
-symlinks -cdrs "${copy_catkin_ws}"
-
-ttcopy "${copy_catkin_ws}" "${PWD}"
-
-# hold off on this for now
-if false; then
-    catkin_ws_pathfix "${copy_catkin_ws}" "${PWD}"
-fi
+symlinks -cdrs "${catkin_ws}"
 
 exit "${result}"
