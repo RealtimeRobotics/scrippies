@@ -316,6 +316,7 @@ readonly top_pkg_list="$(mktemp -t top_pkg_list.XXXXXX)"
 find "${here}" -maxdepth 1 -type f -name '*.deb' \
     -exec dpkg-deb --show --showformat='${Package}\n' {} \; \
     >"${top_pkg_list}"
+sort -uo "${top_pkg_list}" "${top_pkg_list}"
 if ! [ "true" = "${requested_uninstall:-false}" ]; then
     info "installing packages"
     if [ -f "${here}/install-list.txt" ]; then
