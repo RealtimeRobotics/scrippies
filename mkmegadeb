@@ -11,10 +11,10 @@ readonly tmpdir="$(mktemp -dt "${whatami}.XXXXXX")"
 
 readonly default_distribution="xenial"
 
-log() { echo "${whatami}[$$]: $@" >&2; }
-error() { log "ERROR: $@"; }
-warning() { log "WARNING: $@"; }
-info() { log "INFO: $@"; }
+log() { echo "${whatami}[$$]: $*" >&2; }
+error() { log "ERROR: $*"; }
+warning() { log "WARNING: $*"; }
+info() { log "INFO: $*"; }
 
 die() {
     error "$@"
@@ -30,7 +30,7 @@ cleanup() {
 
 usage() {
     cat <<EOF
-Usage: $(basename ${this}) [OPTION]...
+Usage: $0 [OPTION]...
 Create megadeb from all debian packages in current working directory.
 
 Options:
@@ -42,15 +42,15 @@ Options:
 
 Examples:
 
-    \$ $(basename ${this})
+    \$ $0
 
-    \$ $(basename ${this}) -C \$PWD
+    \$ $0 -C \$PWD
 
-    \$ $(basename ${this}) -C \$PWD -D xenial
+    \$ $0 -C \$PWD -D xenial
 
-    \$ $(basename ${this}) -C \$PWD -D xenial -R
+    \$ $0 -C \$PWD -D xenial -R
 
-    \$ $(basename ${this}) -C \$PWD -D xenial -R -o \$PWD.deb.run
+    \$ $0 -C \$PWD -D xenial -R -o \$PWD.deb.run
 
 EOF
 }
@@ -79,7 +79,9 @@ var_lib_apt_lists() {
 #
 # $1 : fake apt dir
 enfake_apt() {
-    local apt_subdirs_list="$(mktemp -t apt_subdirs_list.XXXXXX)"
+    # shellcheck disable=SC2039
+    local apt_subdirs_list=""
+    apt_subdirs_list="$(mktemp -t apt_subdirs_list.XXXXXX)"
     cat >"${apt_subdirs_list}" <<EOF
 etc/apt
 var/cache/apt
@@ -162,7 +164,7 @@ while getopts ":hrusC:D:Ro:p:" opt; do
         \?) die "bad option: -${OPTARG}" ;;
     esac
 done
-shift "$((${OPTIND} - 1))"
+shift "$((OPTIND - 1))"
 
 if ! [ 0 -eq "$#" ]; then
     die "bad args"
@@ -212,9 +214,12 @@ if ! [ "true" = "${run_megadeb:-false}" ]; then
 
     readonly help_header_file="$(mktemp -t help_header_file.XXXXXX)"
     (
-        export product_name
-        export makeself_basename="$(basename "${makeself_file_name}")"
-        envsubst '${product_name},${makeself_basename}' >"${help_header_file}" <<'EOF'
+        PRODUCT_NAME="${product_name}"
+        export PRODUCT_NAME
+        MAKESELF_BASENAME="$(basename "${makeself_file_name}")"
+        export MAKESELF_BASENAME
+        # shellcheck disable=SC2016
+        envsubst '${PRODUCT_NAME},${MAKESELF_BASENAME}' >"${help_header_file}" <<'EOF'
 Usage: ./${makeself_basename} [MAKESELF_OPTION]... -- [SCRIPT_OPTION]...
 Install ${product_name} packages and dependencies.
 
@@ -307,6 +312,7 @@ EOF
 apt-get -yqo APT::Sandbox::User="$(whoami)" update
 
 readonly top_pkg_list="$(mktemp -t top_pkg_list.XXXXXX)"
+# shellcheck disable=SC2016
 find "${here}" -maxdepth 1 -type f -name '*.deb' \
     -exec dpkg-deb --show --showformat='${Package}\n' {} \; \
     >"${top_pkg_list}"
