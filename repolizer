@@ -445,8 +445,10 @@ if ! command -v gpg >/dev/null 2>&1; then
     apt-get -y --no-install-recommends install gnupg
 fi
 
-rm -vf /etc/apt/sources.list
-find /etc/apt/sources.list.d /var/lib/apt/lists -type f -print -delete
+# nuke apt configuration
+find /etc/apt -type f -name '*.list' -exec rm -vf {} +
+find /var/lib/apt /var/cache/apt -type f -exec rm -vf {} +
+
 ${HERE}/configure-apt ${DISTRIBUTION}
 apt-get -y update
 apt-get -y --no-install-recommends install dpkg-dev
