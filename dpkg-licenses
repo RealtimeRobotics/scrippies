@@ -1,0 +1,238 @@
+#!/bin/sh
+
+# This script is a heavily modified adaptation of the one hosted here:
+#
+#     https://github.com/daald/dpkg-licenses
+#
+# The aforementioned work included the copyright notice that follows.
+#
+#
+# Copyright 2016 Daniel Alder, https://github.com/daald
+#
+# This file is part of dpkg-licenses.
+#
+# dpkg-licenses was written by Daniel Alder, https://github.com/daald
+#
+# dpkg-licenses is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# dpkg-licenses is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with dpkg-licenses.  If not, see <http://www.gnu.org/licenses/>
+
+set -eu
+
+readonly this="$(readlink -f "$0")"
+readonly whatami="$(basename "${this}")"
+readonly tmpdir="$(mktemp -dt "${whatami}.XXXXXX")"
+
+log() { echo "${whatami}[$$]: $*" >&2; }
+error() { log "ERROR: $*"; }
+warning() { log "WARNING: $*"; }
+info() { log "INFO: $*"; }
+debug() {
+    if [ "true" = "${requested_debug:-false}" ]; then
+        log "DEBUG: $*"
+    fi
+}
+
+die() {
+    error "$*"
+    exit 1
+}
+
+cleanup() {
+    status="$?"
+    rm -rf "${tmpdir}" || true
+    return "${status}"
+}
+
+usage() {
+    cat <<EOF
+
+Usage: $0 [OPTION]... PACKAGE_NAME
+Discover, infer, and/or guess the license(s) of the given package name.
+
+Options
+
+    -h    print this usage and return success
+    -d    print debugging information
+    -u    print "unknown" instead of failing
+
+Examples:
+
+    \$ $0
+
+EOF
+}
+
+normalize_license() {
+    sed -r \
+        -e 's/ and /\n/g' \
+        -e 's/^ +//' \
+        -e 's/ +$//' \
+        -e 's/\b[Ll]icen[sc]e\b/License/g' \
+        | sort -u \
+        | tr -s '[:space:]' ' '
+}
+
+# lib/reader-10-Machine-readable-v1.sh
+reader_10_machine_readable() {
+    # shellcheck disable=SC2039
+    local format=""
+    if ! format="$(grep '^Format:' "$1")"; then
+        debug "FAILURE: grep '^Format:' $1"
+        return 1
+    fi
+    case "${format}" in
+        *'://www.debian.org/doc/packaging-manuals/copyright-format/1.0'*) ;;
+
+        *'http://dep.debian.net/deps/dep5'*) ;;
+
+        *'http://anonscm.debian.org/viewvc/dep/web/deps/dep5.mdwn?'*) ;;
+
+        *'http://svn.debian.org/wsvn/dep/web/deps/dep5.mdwn?'*) ;;
+
+        *'http://anonscm.debian.org/loggerhead/dep/dep5/trunk/annotate/179/dep5/copyright-format.xml'*) ;;
+
+        "Format:") # seen in /usr/share/doc/libpcsclite1/copyright
+            ;;
+        *)
+            error "unknown format in $1: ${format}"
+            return 1
+            ;;
+    esac
+    # shellcheck disable=SC2039
+    local grep_out=""
+    grep_out="$(mktemp -t grep_out.XXXXXX)"
+    if ! grep '^License: [[:graph:]]+$' "$1" >"${grep_out}"; then
+        debug "FAILURE: grep '^License: [[:graph:]]+$' $1"
+        return 1
+    fi
+    cut -d: -f2- <"${grep_out}" | normalize_license
+    return 0
+}
+
+# lib/reader-30-fuzzy_common-licenses.sh
+reader_30_fuzzy_common_licenses() {
+    # shellcheck disable=SC2039
+    local grep_out=""
+    grep_out="$(mktemp -t grep_out.XXXXXX)"
+    if ! grep -Eo '/usr/share/common-licenses/[[:alnum:]_.+-]+[[:alnum:]+]' "$1" >"${grep_out}"; then
+        debug "failed to parse fuzzy common licenses: $1"
+        return 1
+    fi
+    cut -d/ -f5- <"${grep_out}" | normalize_license
+    return 0
+}
+
+# lib/reader-50-superfuzzy.sh
+reader_50_superfuzzy() {
+    # shellcheck disable=SC2039
+    local patterns=""
+    patterns="$(mktemp -t patterns.XXXXXX)"
+    cat >"${patterns}" <<'EOF'
+(4-?clause )?"?BSD"? licen[sc]es?
+(Boost Software|mozilla (public)?|MIT) Licen[sc]es?
+(CCPL|BSD|L?GPL)-[0-9a-z.+-]+( Licenses?)?
+Creative Commons( Licenses?)?
+Public Domain( Licenses?)?
+EOF
+    # shellcheck disable=SC2039
+    local grep_out=""
+    grep_out="$(mktemp -t grep_out.XXXXXX)"
+    if ! grep -Ewoi -f "${patterns}" "$1" >"${grep_out}"; then
+        debug "failed to parse superfuzzy: $1"
+        return 1
+    fi
+    normalize_license <"${grep_out}"
+    return 0
+}
+
+# lib/reader-70-free-licence.sh
+reader_70_free_licence() {
+    # shellcheck disable=SC2039
+    local grep_out=""
+    grep_out="$(mktemp -t grep_out.XXXXXX)"
+    if ! grep '^License: [[:graph:]]+$' "$1" >"${grep_out}"; then
+        debug "FAILURE: grep '^License: [[:graph:]]+$' $1"
+        return 1
+    fi
+    cut -d: -f2- <"${grep_out}" | normalize_license
+    return 0
+}
+
+################################################################################
+
+trap cleanup EXIT
+export TMPDIR="${tmpdir}"
+export LC_ALL=C
+
+while getopts ":hdu" opt; do
+    case "${opt}" in
+        h)
+            usage
+            exit "$?"
+            ;;
+        d) readonly requested_debug="true" ;;
+        u) readonly requested_unknown="true" ;;
+        :) die "Missing argument: -${OPTARG}" ;;
+        \?) die "Invalid option: -${OPTARG}" ;;
+    esac
+done
+shift "$((OPTIND - 1))"
+
+if ! [ 1 -eq "$#" ]; then
+    die "bad args"
+fi
+
+readonly package_name="$1"
+readonly dpkg_listfiles="$(mktemp -t dpkg_listfiles.XXXXXX)"
+if ! dpkg -L "${package_name}" >"${dpkg_listfiles}"; then
+    if [ "true" = "${requested_unknown:-false}" ]; then
+        echo "${package_name}: unknown"
+        exit 0
+    fi
+    die "FAILURE: dpkg -L ${package_name}"
+fi
+
+readonly copyright_list="$(mktemp -t copyright_list.XXXXXX)"
+if ! grep -E '^/usr/share/doc/[^/]+/copyright$' "${dpkg_listfiles}" >"${copyright_list}"; then
+    if [ "true" = "${requested_unknown:-false}" ]; then
+        echo "${package_name}: unknown"
+        exit 0
+    fi
+    die "missing copyright file: ${package_name}"
+fi
+
+case "$(wc -l <"${copyright_list}")" in
+    0) die "$(wc -l "${copyright_list}")" ;;
+    1) ;;
+    *) die "$(wc -l "${copyright_list}")" ;;
+esac
+readonly copyright_file="$(cat "${copyright_list}")"
+
+if license="$(reader_10_machine_readable "${copyright_file}")"; then
+    debug "SUCCESS: reader_10_machine_readable ${copyright_file}"
+elif license="$(reader_30_fuzzy_common_licenses "${copyright_file}")"; then
+    debug "SUCCESS: reader_30_fuzzy_common_licenses ${copyright_file}"
+elif license="$(reader_50_superfuzzy "${copyright_file}")"; then
+    debug "SUCCESS: reader_50_superfuzzy ${copyright_file}"
+elif license="$(reader_70_free_licence "${copyright_file}")"; then
+    debug "SUCCESS: reader_70_free_licence ${copyright_file}"
+else
+    license="unknown"
+fi
+if [ -z "${license}" ]; then
+    die "empty license"
+fi
+
+echo "${package_name}: ${license}"
+
+exit "$?"
