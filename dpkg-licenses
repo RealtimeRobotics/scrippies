@@ -227,12 +227,12 @@ elif license="$(reader_50_superfuzzy "${copyright_file}")"; then
 elif license="$(reader_70_free_licence "${copyright_file}")"; then
     debug "SUCCESS: reader_70_free_licence ${copyright_file}"
 else
-    license="unknown"
-fi
-if [ -z "${license}" ]; then
-    die "empty license"
+    if [ "true" = "${requested_unknown:-false}" ]; then
+        echo "${package_name}: unknown"
+        exit 0
+    fi
+    die "failed to discover, infer, or guess license(s): ${package_name}"
 fi
 
 echo "${package_name}: ${license}"
-
-exit "$?"
+exit 0
