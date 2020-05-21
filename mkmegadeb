@@ -125,8 +125,8 @@ apt_install() {
 
 # $1 : list of packages to uninstall
 apt_uninstall() {
-    apt list --installed \
-        | cut -d/ -f1 \
+    dpkg --get-selections \
+        | sed -nr '/\binstall$/s,^([[:alnum:]][[:alnum:].+-]+).*,\1,gp' \
         | grep -Fxf "$1" \
         | xargs -r apt-get -yqo APT::Sandbox::User="$(whoami)" purge
 }
