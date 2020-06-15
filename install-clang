@@ -7,8 +7,8 @@ set -eu
 readonly this="$(readlink -f "$0")"
 readonly whatami="$(basename "${this}")"
 
-log() { echo "${whatami}[$$]: $@" >&2; }
-error() { log "ERROR: $@"; }
+log() { echo "${whatami}[$$]: $*" >&2; }
+error() { log "ERROR: $*"; }
 
 die() {
     error "$@"
@@ -52,7 +52,7 @@ while getopts ":hu" opt; do
         \?) die "bad option: -${OPTARG}" ;;
     esac
 done
-shift "$((${OPTIND} - 1))"
+shift "$((OPTIND - 1))"
 
 if [ "true" = "${uninstall:-false}" ]; then
     update-alternatives --remove cc "$(command -v clang-6.0)"
