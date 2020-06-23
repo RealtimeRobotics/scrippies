@@ -138,7 +138,7 @@ export TMPDIR="${tmpdir}"
 export LC_ALL=C
 export DEBIAN_FRONTEND=noninteractive DEBCONF_NONINTERACTIVE_SEEN=true
 
-while getopts ":hrusC:D:Ro:p:" opt; do
+while getopts ":hruaC:D:Ro:p:" opt; do
     case "${opt}" in
         h)
             usage
@@ -146,7 +146,7 @@ while getopts ":hrusC:D:Ro:p:" opt; do
             ;;
         r) readonly run_megadeb="true" ;;
         u) readonly requested_uninstall="true" ;;
-        s) readonly requested_selfonly="true" ;;
+        a) readonly requested_allapt="true" ;;
         C)
             if ! workdir="$(readlink -f "${OPTARG}")"; then
                 die "missing: ${OPTARG}"
@@ -226,7 +226,7 @@ Install ${product_name} packages and dependencies.
 Script Options:
 
     -u    uninstall
-    -s    run self-contained (without external packages)
+    -a    run with ALL apt information available to host
 
 Makeself Options:
 EOF
@@ -296,9 +296,10 @@ enfake_apt "$(mktemp -dt fake_apt_dir.XXXXXX)"
 # versions that we didn't bring with us. The drawback is that the megadebs
 # are not truly "stand-alone" -- at least not in the same way that Debian
 # installers are.
-if [ "true" = "${requested_selfonly:-false}" ]; then
+if [ "true" = "${requested_allapt:-false}" ]; then
     # remove old apt sources list files
-    warning "running self-contained (without external packages)"
+    warning "running with ALL apt information available to host"
+else
     find "$(etc_apt)" -type f -name '*.list' -print -delete
     find "$(var_lib_apt_lists)" -type f -print -delete
 fi
