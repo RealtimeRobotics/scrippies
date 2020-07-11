@@ -1,0 +1,154 @@
+#!/bin/sh
+
+# scrippies/ssh-keygen-copy
+
+set -eu
+
+readonly this="$(readlink -f "$0")"
+readonly whatami="$(basename "${this}")"
+readonly tmpdir="$(mktemp -dt "${whatami}.XXXXXX")"
+
+log() { echo "${whatami}[$$]: $*" >&2; }
+error() { log "ERROR: $*"; }
+warning() { log "WARNING: $*"; }
+info() { log "INFO: $*"; }
+
+die() {
+    error "$*"
+    usage >&2
+    exit 1
+}
+
+cleanup() {
+    status="$?"
+    rm -rf "${tmpdir}" || true
+    return "${status}"
+}
+
+usage() {
+    cat <<EOF
+
+Usage: $0 [OPTION]... USER@HOST
+For the given USER@HOST, ssh-keyscan, ssh-keygen, and ssh-copy-id.
+
+Options:
+
+    -h    print this usage and return success
+    -f    force (overwrite extant files)
+
+Examples:
+
+    \$ $0 -h
+
+    \$ $0 luser@host42.example.com
+
+    \$ $0 -f luser@host42.example.com
+
+Notes:
+
+  * requirements
+
+    * \`sshpass\` command
+
+    * defined non-empty \$SSHPASS environment variable
+
+  * creates (and optionally overwrites) the following files:
+
+    * \$HOME/.ssh/kh_\$1     : ssh known hosts file
+
+    * \$HOME/.ssh/id_\$1     : ssh private key
+
+    * \$HOME/.ssh/id_\$1.pub : ssh public key
+
+  * works well with the following ssh config snippet:
+
+    Host \$1
+    User \${1%@*}
+    IdentityFile ~/.ssh/id_\$1
+    UserKnownHostsFile ~/.ssh/kh_\$1
+
+EOF
+}
+
+file_check_backup() {
+    if ! [ -f "$1" ]; then
+        return 0
+    fi
+    if ! [ "true" = "${requested_force:-false}" ]; then
+        error "file exists: ${1}"
+        return 1
+    fi
+    warning "file exists: ${1}"
+    warning "$(mv -v "$1" "${1}.backup")"
+}
+
+################################################################################
+
+trap cleanup EXIT
+export TMPDIR="${tmpdir}"
+export LC_ALL=C
+
+while getopts ":hf" opt; do
+    case "${opt}" in
+        h)
+            usage
+            exit "$?"
+            ;;
+        f) readonly requested_force="true" ;;
+        :) die "Missing argument: -${OPTARG}" ;;
+        \?) die "Invalid option: -${OPTARG}" ;;
+    esac
+done
+shift "$((OPTIND - 1))"
+
+export SSH_OPTS="-F /dev/null"
+
+if ! command -v sshpass >/dev/null 2>&1; then
+    die "missing command: sshpass"
+fi
+
+if [ -z "${SSHPASS+x}" ]; then
+    die "undefined/empty env var: SSHPASS"
+fi
+
+if ! [ 1 -eq "$#" ]; then
+    die "bad args"
+fi
+
+# https://stackoverflow.com/questions/106179/regular-expression-to-match-dns-hostname-or-ip-address
+#
+# hname = name(.name)*
+# name = [[:alnum:]]([[:alnum:]-]*[[:alnum:]])*
+# ^[[:alnum:]]([[:alnum:]-]*[[:alnum:]])*([.][[:alnum:]]([[:alnum:]-]*[[:alnum:]])*)*$
+if ! echo "$1" | grep -Eq '[a-z_][a-z0-9_-]*[$]?[@][a-z0-9]([a-z0-9-]*[a-z0-9])*([.][a-z0-9]([a-z0-9-]*[a-z0-9])*)*$'; then
+    die "bad argument: $1"
+fi
+
+readonly khosts="${HOME}/.ssh/kh_${1}"
+readonly prikey="${HOME}/.ssh/id_${1}"
+readonly pubkey="${HOME}/.ssh/id_${1}.pub"
+
+file_check_backup "${khosts}"
+file_check_backup "${prikey}"
+file_check_backup "${pubkey}"
+
+ssh-keyscan "${1#*@}" >"${khosts}"
+ssh-keygen -vvv -N '' -C "${prikey}" -f "${prikey}"
+sshpass -e ssh-copy-id \
+    -i "${prikey}" \
+    -o PreferredAuthentications=password \
+    -o PubkeyAuthentication=no \
+    -o StrictHostKeyChecking=yes \
+    -o UserKnownHostsFile="${khosts}" \
+    "$1"
+
+ssh \
+    -i "${prikey}" \
+    -o PreferredAuthentications=publickey \
+    -o PubkeyAuthentication=yes \
+    -o StrictHostKeyChecking=yes \
+    -o UserKnownHostsFile="${khosts}" \
+    "$1" \
+    'uname -a && date -uIseconds'
+
+exit "$?"
