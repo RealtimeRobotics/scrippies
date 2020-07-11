@@ -28,8 +28,8 @@ cleanup() {
 usage() {
     cat <<EOF
 
-Usage: $0 [OPTION]... USER@HOST
-For the given USER@HOST, ssh-keyscan, ssh-keygen, and ssh-copy-id.
+Usage: $0 [OPTION]... [USER@]HOST
+For the given [USER@]HOST, ssh-keyscan, ssh-keygen, and ssh-copy-id.
 
 Options:
 
@@ -120,7 +120,7 @@ fi
 # hname = name(.name)*
 # name = [[:alnum:]]([[:alnum:]-]*[[:alnum:]])*
 # ^[[:alnum:]]([[:alnum:]-]*[[:alnum:]])*([.][[:alnum:]]([[:alnum:]-]*[[:alnum:]])*)*$
-if ! echo "$1" | grep -Eq '[a-z_][a-z0-9_-]*[$]?[@][a-z0-9]([a-z0-9-]*[a-z0-9])*([.][a-z0-9]([a-z0-9-]*[a-z0-9])*)*$'; then
+if ! echo "$1" | grep -Eq '([a-z_][a-z0-9_-]*[$]?[@])?[a-z0-9]([a-z0-9-]*[a-z0-9])*([.][a-z0-9]([a-z0-9-]*[a-z0-9])*)*$'; then
     die "bad argument: $1"
 fi
 
