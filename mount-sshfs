@@ -2,7 +2,7 @@
 
 # scrippies/mount-sshfs
 
-set -euvx
+set -eu
 
 readonly this="$(readlink -f "$0")"
 readonly whatami="$(basename "${this}")"
@@ -27,8 +27,9 @@ cleanup() {
 
 usage() {
     cat <<EOF
-Usage: $0 [OPTION]... HOSTNAME
-Mount via sshfs HOSTNAME to \$HOME/mnt/HOSTNAME.
+
+Usage: $0 [OPTION]... [USER@]HOST
+Mount via sshfs [USER@]HOST to \$HOME/mnt/[USER@]HOST.
 
 Options:
 
@@ -39,9 +40,9 @@ Examples:
 
     \$ $0 -h
 
-    \$ $0 host42.example.com
+    \$ $0 luser@host42.example.com
 
-    \$ $0 -u host42.example.com
+    \$ $0 -u luser@host42.example.com
 
 EOF
 }
@@ -51,6 +52,14 @@ EOF
 trap cleanup EXIT
 export TMPDIR="${tmpdir}"
 export LC_ALL=C
+
+if ! command -v fusermount >/dev/null 2>&1; then
+    die "missing program: fusermount"
+fi
+
+if ! command -v sshfs >/dev/null 2>&1; then
+    die "missing program: sshfs"
+fi
 
 while getopts ":hu" opt; do
     case "${opt}" in
@@ -69,41 +78,25 @@ if ! [ 1 -eq "$#" ]; then
     die "bad args"
 fi
 
-if ! command -v fusermount >/dev/null 2>&1; then
-    die "missing program: fusermount"
+# https://stackoverflow.com/questions/106179/regular-expression-to-match-dns-hostname-or-ip-address
+if ! echo "$1" | grep -Eq '([a-z_][a-z0-9_-]*[$]?[@])?[a-z0-9]([a-z0-9-]*[a-z0-9])*([.][a-z0-9]([a-z0-9-]*[a-z0-9])*)*$'; then
+    die "bad argument: $1"
 fi
 
-if ! command -v sshfs >/dev/null 2>&1; then
-    die "missing program: sshfs"
-fi
-
-if [ -z "${HOME:-}" ]; then
-    warning "undefined \$HOME"
-    if ! getent_passwd_all="$(getent passwd "$(id -u)")"; then
-        die "FAILURE: getent passwd $(id -u)"
-    fi
-    getent_passwd_home="$(echo "${getent_passwd_all}" | cut -d: -f6)"
-    if [ -z "${getent_passwd_home}" ]; then
-        die "bad getent passwd: ${getent_passwd_all}"
-    fi
-    export HOME="${getent_passwd_home}"
-    warning "inferred \$HOME: ${HOME}"
-fi
-
-readonly mount_dir="${HOME}/mnt/$1"
+readonly mount_point="${HOME}/mnt/$1"
 
 if [ "true" = "${requested_unmount:-false}" ]; then
     sync
-    fusermount -u "${mount_dir}" >&2
+    fusermount -u "${mount_point}" >&2
     exit "$?"
 fi
 
-if ! [ -d "${mount_dir}" ]; then
-    warning "missing directory: ${mount_dir}"
-    mkdir -vp "${mount_dir}" >&2
+if ! [ -d "${mount_point}" ]; then
+    warning "missing directory: ${mount_point}"
+    info "$(mkdir -vp "${mount_point}")"
 fi
 
-sshfs -o sshfs_debug,reconnect,workaround=all "$1:/" "${mount_dir}" >&2
-sync
+sshfs -o sshfs_debug,reconnect,workaround=all "$1:/" "${mount_point}" >&2
+mount -l | grep "${mount_point}" >&2
 
 exit "$?"
