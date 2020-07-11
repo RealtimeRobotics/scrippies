@@ -34,7 +34,7 @@ For the given USER@HOST, ssh-keyscan, ssh-keygen, and ssh-copy-id.
 Options:
 
     -h    print this usage and return success
-    -f    force (overwrite extant files)
+    -f    force (backup and replace extant files)
 
 Examples:
 
@@ -79,7 +79,7 @@ file_check_backup() {
         return 1
     fi
     warning "file exists: ${1}"
-    warning "$(mv -v "$1" "${1}.backup")"
+    warning "$(mv -v "$1" "${1}.backup.$(date -uIseconds)")"
 }
 
 ################################################################################
