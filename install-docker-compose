@@ -1,6 +1,6 @@
 #!/bin/sh
 
-# scrippies/docker-compose-install
+# scrippies/install-docker-compose
 
 set -euvx
 
