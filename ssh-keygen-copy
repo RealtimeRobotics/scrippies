@@ -70,31 +70,18 @@ Notes:
 EOF
 }
 
-file_check_backup() {
-    if ! [ -f "$1" ]; then
-        return 0
-    fi
-    if ! [ "true" = "${requested_force:-false}" ]; then
-        error "file exists: ${1}"
-        return 1
-    fi
-    warning "file exists: ${1}"
-    warning "$(mv -v "$1" "${1}.backup.$(date -uIseconds)")"
-}
-
 ################################################################################
 
 trap cleanup EXIT
 export TMPDIR="${tmpdir}"
 export LC_ALL=C
 
-while getopts ":hf" opt; do
+while getopts ":h" opt; do
     case "${opt}" in
         h)
             usage
             exit "$?"
             ;;
-        f) readonly requested_force="true" ;;
         :) die "Missing argument: -${OPTARG}" ;;
         \?) die "Invalid option: -${OPTARG}" ;;
     esac
@@ -128,12 +115,22 @@ readonly khosts="${HOME}/.ssh/kh_${1}"
 readonly prikey="${HOME}/.ssh/id_${1}"
 readonly pubkey="${HOME}/.ssh/id_${1}.pub"
 
-file_check_backup "${khosts}"
-file_check_backup "${prikey}"
-file_check_backup "${pubkey}"
+if ! [ -f "${khosts}" ]; then
+    ssh-keyscan "${1#*@}" >"${khosts}"
+else
+    warning "file exists: ${khosts}"
+fi
 
-ssh-keyscan "${1#*@}" >"${khosts}"
-ssh-keygen -vvv -N '' -C "${prikey}" -f "${prikey}"
+if ! [ -f "${prikey}" ]; then
+    ssh-keygen -vvv -N '' -C "${prikey}" -f "${prikey}"
+else
+    warning "file exists: ${prikey}"
+fi
+
+if ! [ -f "${pubkey}" ]; then
+    ssh-keygen -vvv -y -f "${prikey}" >"${pubkey}"
+fi
+
 sshpass -e ssh-copy-id \
     -i "${prikey}" \
     -o PreferredAuthentications=password \
