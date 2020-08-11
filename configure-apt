@@ -449,29 +449,60 @@ sckuXINIU3DFWzZGr0QrqkuE/jyr7FXeUJj9B7cLo+s/TXo+RaVfi3kOc9BoxIvy
 =CLGF
 -----END PGP PUBLIC KEY BLOCK-----
 EOF
+
+#############
+# node_10.x #
+#############
 if [ "private" = "${use_network:-public}" ]; then
-    readonly node_repo_uri="http://apt.realtime.cxm/apt/node_10.x/${distribution}"
+    readonly node_10_x_repo_uri="http://apt.realtime.cxm/apt/node_10.x/${distribution}"
 else
-    readonly node_repo_uri="http://deb.nodesource.com/node_10.x"
+    readonly node_10_x_repo_uri="http://deb.nodesource.com/node_10.x"
 fi
-readonly node_atyp_list="$(mktemp -t node_atyp_list.XXXXXX)"
-cat >"${node_atyp_list}" <<'EOF'
+readonly node_10_x_atyp_list="$(mktemp -t node_10_x_atyp_list.XXXXXX)"
+cat >"${node_10_x_atyp_list}" <<'EOF'
 deb
 deb-src
 EOF
-readonly node_dist_list="$(mktemp -t node_dist_list.XXXXXX)"
-cat >"${node_dist_list}" <<EOF
+readonly node_10_x_dist_list="$(mktemp -t node_10_x_dist_list.XXXXXX)"
+cat >"${node_10_x_dist_list}" <<EOF
 ${distribution}
 EOF
-readonly node_comp_list="$(mktemp -t node_comp_list.XXXXXX)"
-cat >"${node_comp_list}" <<'EOF'
+readonly node_10_x_comp_list="$(mktemp -t node_10_x_comp_list.XXXXXX)"
+cat >"${node_10_x_comp_list}" <<'EOF'
 main
 EOF
 setup_apt_list \
-    "${node_repo_uri}" \
-    "${node_atyp_list}" \
-    "${node_dist_list}" \
-    "${node_comp_list}"
+    "${node_10_x_repo_uri}" \
+    "${node_10_x_atyp_list}" \
+    "${node_10_x_dist_list}" \
+    "${node_10_x_comp_list}"
+
+#############
+# node_14.x #
+#############
+if [ "private" = "${use_network:-public}" ]; then
+    readonly node_14_x_repo_uri="http://apt.realtime.cxm/apt/node_14.x/${distribution}"
+else
+    readonly node_14_x_repo_uri="http://deb.nodesource.com/node_14.x"
+fi
+readonly node_14_x_atyp_list="$(mktemp -t node_14_x_atyp_list.XXXXXX)"
+cat >"${node_14_x_atyp_list}" <<'EOF'
+deb
+deb-src
+EOF
+readonly node_14_x_dist_list="$(mktemp -t node_14_x_dist_list.XXXXXX)"
+cat >"${node_14_x_dist_list}" <<EOF
+${distribution}
+EOF
+readonly node_14_x_comp_list="$(mktemp -t node_14_x_comp_list.XXXXXX)"
+cat >"${node_14_x_comp_list}" <<'EOF'
+main
+EOF
+setup_apt_list \
+    "${node_14_x_repo_uri}" \
+    "${node_14_x_atyp_list}" \
+    "${node_14_x_dist_list}" \
+    "${node_14_x_comp_list}"
 
 ################################################################################
 
