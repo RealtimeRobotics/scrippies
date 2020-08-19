@@ -257,7 +257,7 @@ fi
 
 # pub   4096R/8A68278A 2020-03-16
 # uid                  Launchpad PPA for realtime-robotics
-gpg --dearmor >"$(etc_apt_trusted_gpg_d)/0xae0f78ce556b80ab48ce556f208dac2d8a68278a.gpg" <<'EOF'
+cat >"$(etc_apt_trusted_gpg_d)/0xae0f78ce556b80ab48ce556f208dac2d8a68278a.asc" <<'EOF'
 -----BEGIN PGP PUBLIC KEY BLOCK-----
 
 mQINBF5vsKcBEACw/lMOWu4aQBG2155Tqji9x7S7QqOIoXdzHLu1J7uih3DHweoS
@@ -395,7 +395,7 @@ esac
 # pub   4096R/68576280 2014-06-13
 # uid                  NodeSource <gpg@nodesource.com>
 # sub   4096R/AA01DA2C 2014-06-13
-gpg --dearmor >"$(etc_apt_trusted_gpg_d)/0x9fd3b784bc1c6fc31a8a0a1c1655a0ab68576280.gpg" <<'EOF'
+cat >"$(etc_apt_trusted_gpg_d)/0x9fd3b784bc1c6fc31a8a0a1c1655a0ab68576280.asc" <<'EOF'
 -----BEGIN PGP PUBLIC KEY BLOCK-----
 Version: GnuPG v1
 Comment: GPGTools - https://gpgtools.org
@@ -512,7 +512,7 @@ setup_apt_list \
 
 # pub   4096R/AB17C654 2019-05-30 [expires: 2021-05-29]
 # uid                  Open Robotics <info@osrfoundation.org>
-gpg --dearmor >"$(etc_apt_trusted_gpg_d)/0xc1cf6e31e6bade8868b172b4f42ed6fbab17c654.gpg" <<'EOF'
+cat >"$(etc_apt_trusted_gpg_d)/0xc1cf6e31e6bade8868b172b4f42ed6fbab17c654.asc" <<'EOF'
 -----BEGIN PGP PUBLIC KEY BLOCK-----
 Version: GnuPG v1
 
@@ -577,7 +577,7 @@ setup_apt_list \
 # pub   1024D/437D05B5 2004-09-12
 # uid                  Ubuntu Archive Automatic Signing Key <ftpmaster@ubuntu.com>
 # sub   2048g/79164387 2004-09-12
-gpg --dearmor >"$(etc_apt_trusted_gpg_d)/0x630239cc130e1a7fd81a27b140976eaf437d05b5.gpg" <<'EOF'
+cat >"$(etc_apt_trusted_gpg_d)/0x630239cc130e1a7fd81a27b140976eaf437d05b5.asc" <<'EOF'
 -----BEGIN PGP PUBLIC KEY BLOCK-----
 Version: GnuPG v1
 
@@ -612,7 +612,7 @@ EOF
 
 # pub   4096R/C0B21F32 2012-05-11
 # uid                  Ubuntu Archive Automatic Signing Key (2012) <ftpmaster@ubuntu.com>
-gpg --dearmor >"$(etc_apt_trusted_gpg_d)/0x790bc7277767219c42c86f933b4fe6acc0b21f32.gpg" <<'EOF'
+cat >"$(etc_apt_trusted_gpg_d)/0x790bc7277767219c42c86f933b4fe6acc0b21f32.asc" <<'EOF'
 -----BEGIN PGP PUBLIC KEY BLOCK-----
 Version: GnuPG v1
 
