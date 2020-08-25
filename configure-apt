@@ -27,18 +27,20 @@ cleanup() {
 
 usage() {
     cat <<EOF
+
 Usage: $0 [OPTION]... [DISTRIBUTION]
 Configure apt to use additional repositories.
-
-Notes:
-
-    * If not given, DISTRIBUTION discovery is attempted via $(lsb_release -sc)
-      or, failing that, $(/etc/os-release) definition for $(UBUNTU_CODENAME).
 
 Options:
 
     -h            print usage and exit
     -f NETWORK    force NETWORK={private,public} (default is to discover)
+
+Notes:
+
+    * If not given, DISTRIBUTION discovery is attempted via \`lsb_release -sc\`
+      or, failing that, the \`/etc/os-release\` definition for
+      \`UBUNTU_CODENAME\`.
 
 Examples:
 
