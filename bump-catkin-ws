@@ -126,7 +126,7 @@ fi
 # `<version>...</version>` tag and every version value is identical across all
 # `package.xml` files.
 readonly package_xml_list="$(mktemp -t package_xml_list.XXXXXX)"
-git -C "${catkin_ws}" ls-files | grep '/package.xml$' >"${package_xml_list}"
+git -C "${catkin_ws}" ls-files | grep -E '^([^/]*/)*package[.]xml$' >"${package_xml_list}"
 sort -uo "${package_xml_list}" "${package_xml_list}"
 
 readonly triplet_list="$(mktemp -t triplet_list.XXXXXX)"
