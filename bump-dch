@@ -1,0 +1,196 @@
+#!/bin/sh
+
+# scrippies/bump-dch
+
+set -eu
+
+readonly this="$(readlink -f "$0")"
+readonly whatami="$(basename "${this}")"
+readonly tmpdir="$(mktemp -dt "${whatami}.XXXXXX")"
+
+readonly default_bump="patch"
+
+log() { echo "${whatami}[$$]: $*" >&2; }
+error() { log "ERROR: $*"; }
+warning() { log "WARNING: $*"; }
+info() { log "INFO: $*"; }
+
+die() {
+    error "$@"
+    usage >&2
+    exit 1
+}
+
+cleanup() {
+    status="$?"
+    rm -rf "${tmpdir}" || true
+    return "${status}"
+}
+
+usage() {
+    cat <<EOF
+
+Usage: $0 [OPTION]... [-- [MESSAGE]]
+Bump the debian/changelog version triplet.
+
+Options:
+
+    -h,--help       print help and exit
+    -n,--dry-run    don't actually do anything
+    -C WORKDIR      run as if started in WORKDIR (default: \$PWD)
+    --major         bump the version major number
+    --minor         bump the version minor number
+    --patch         bump the version patch number (this is the default)
+
+Notes:
+
+    * MESSAGE defaults to "version \$new_triplet"
+
+Examples:
+
+    \$ $0 -h
+
+    \$ $0 -n
+
+    \$ $0 -n -C \$PWD
+
+    \$ $0 -n -C \$PWD --major
+
+    \$ $0 -n -C \$PWD --minor
+
+    \$ $0 -n -C \$PWD --patch
+
+EOF
+}
+
+is_good_triplet() {
+    echo "$@" | grep -Eq '^[[:digit:]]+\.[[:digit:]]+\.[[:digit:]]+$'
+}
+
+################################################################################
+
+trap cleanup EXIT
+export TMPDIR="${tmpdir}"
+export LC_ALL=C
+
+while [ 0 -lt "$#" ]; do
+    case "$1" in
+        -h | --help)
+            usage
+            exit "$?"
+            ;;
+        -C)
+            if [ -z "${2:-}" ]; then
+                die "missing argument: $1"
+            fi
+            workdir="$(readlink -f "$2")"
+            if [ -z "${workdir}" ]; then
+                die "missing path: $2"
+            fi
+            if ! [ -d "${workdir}" ]; then
+                die "missing directory: $2"
+            fi
+            readonly workdir="${workdir}"
+            shift
+            ;;
+        -n | --dry-run)
+            readonly requested_dry_run="true"
+            ;;
+        --major)
+            readonly bump="major"
+            ;;
+        --minor)
+            readonly bump="minor"
+            ;;
+        --patch)
+            readonly bump="patch"
+            ;;
+        --)
+            shift
+            break
+            ;;
+        *)
+            die "bad option: $1"
+            ;;
+    esac
+    shift
+done
+
+if [ -n "${workdir:-}" ]; then
+    info "workdir: ${workdir}"
+else
+    readonly workdir="${PWD}"
+    warning "defaulting workdir: ${workdir}"
+fi
+
+if [ -n "${bump:-}" ]; then
+    info "bump: ${bump}"
+else
+    readonly bump="${default_bump}"
+    warning "defaulting bump: ${bump}"
+fi
+
+################################################################################
+
+if ! [ -f "${workdir}/debian/changelog" ]; then
+    die "missing file: ${workdir}/debian/changelog"
+fi
+
+if ! old_triplet="$(dpkg-parsechangelog -l "${workdir}/debian/changelog" -S Version)"; then
+    die "FAILURE: dpkg-parsechangelog -l ${workdir}/debian/changelog -S Version"
+fi
+if ! is_good_triplet "${old_triplet}"; then
+    die "bad old_triplet: ${old_triplet}"
+fi
+readonly old_triplet="${old_triplet}"
+info "old_triplet: ${old_triplet}"
+
+readonly old_major="$(echo "${old_triplet}" | cut -d. -f1)"
+readonly old_minor="$(echo "${old_triplet}" | cut -d. -f2)"
+readonly old_patch="$(echo "${old_triplet}" | cut -d. -f3)"
+
+case "${bump}" in
+    major)
+        readonly new_major="$((old_major + 1))"
+        readonly new_minor="0"
+        readonly new_patch="0"
+        ;;
+    minor)
+        readonly new_major="${old_major}"
+        readonly new_minor="$((old_minor + 1))"
+        readonly new_patch="0"
+        ;;
+    patch)
+        readonly new_major="${old_major}"
+        readonly new_minor="${old_minor}"
+        readonly new_patch="$((old_patch + 1))"
+        ;;
+    *)
+        die "bad bump: ${bump}"
+        ;;
+esac
+
+readonly new_triplet="${new_major}.${new_minor}.${new_patch}"
+info "new_triplet: ${new_triplet}"
+
+readonly old_debian_changelog="$(mktemp -ut old_debian_changelog.XXXXXX)"
+readonly new_debian_changelog="$(mktemp -ut new_debian_changelog.XXXXXX)"
+cp "${workdir}/debian/changelog" "${old_debian_changelog}"
+cp "${workdir}/debian/changelog" "${new_debian_changelog}"
+
+dch -c "${new_debian_changelog}" -v "${new_triplet}" "${@:-version ${new_triplet}}"
+dch -c "${new_debian_changelog}" -r ""
+info "diff:"
+diff "${old_debian_changelog}" "${new_debian_changelog}" | while read -r line; do
+    info "    ${line}"
+done
+
+if [ "true" = "${requested_dry_run:-false}" ]; then
+    info "requested dry run; not modified: ${workdir}/debian/changelog"
+    exit "$?"
+fi
+
+cp "${new_debian_changelog}" "${workdir}/debian/changelog"
+info "modified: ${workdir}/debian/changes"
+
+exit "$?"
