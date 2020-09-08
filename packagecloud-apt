@@ -1,0 +1,375 @@
+#!/bin/sh
+
+# scrippies/packagecloud-apt
+
+set -eu
+
+readonly this="$(readlink -f "$0")"
+readonly whatami="$(basename "${this}")"
+readonly tmpdir="$(mktemp -dt "${whatami}.XXXXXX")"
+
+log() { echo "${whatami}[$$]: $*" >&2; }
+error() { log "ERROR: $*"; }
+warning() { log "WARNING: $*"; }
+info() { log "INFO: $*"; }
+
+die() {
+    error "$@"
+    exit 1
+}
+
+cleanup() {
+    status="$?"
+    rm -rf "${tmpdir}"
+    return "${status}"
+}
+
+usage() {
+    cat <<EOF
+
+Usage: $0 [OPTION]...
+Configure apt to use a packagecloud.io repository.
+
+Options:
+
+    --account PACKAGECLOUD_ACCOUNT              account name
+    --repo PACKAGECLOUD_REPO                    repository name
+    --master-token PACKAGECLOUD_MASTER_TOKEN    repository master token
+    --os PACKAGECLOUD_OS                        override OS (detected by default)
+    --dist PACKAGECLOUD_DIST                    override distribution (detected by default)
+    --unique-id PACKAGECLOUD_UNIQUE_ID          override unique id (default: "\$(whoami)@\$(hostname -f)_\$(date +%F)")
+    --output-asc PACKAGECLOUD_OUTPUT_ASC        override output asc path (default: \$ACCOUNT_\$REPO.asc)
+    --output-list PACKAGECLOUD_OUTPUT_LIST      override output list path (default: \$ACCOUNT_\$REPO.list)
+    --output-auth PACKAGECLOUD_OUTPUT_AUTH      override output auth path (default: \$ACCOUNT_\$REPO.conf)
+
+Examples:
+
+    \$ $0 --account luser --repo qux --master-token ffffffffffffffffffffffffffffffffffffffffffffffff
+
+Notes:
+
+    * PACKAGECLOUD_OUTPUT_ASC: gpg ascii-armored public key
+
+    * PACKAGECLOUD_OUTPUT_LIST: apt sources list file
+
+    * PACKAGECLOUD_OUTPUT_AUTH: login configuration file for apt sources
+
+EOF
+}
+
+detect_os() {
+    if command -v lsb_release >/dev/null 2>&1; then
+        lsb_release --short --id | awk '{print tolower($0)}'
+        return 0
+    fi
+    if [ -f /etc/lsb-release ]; then
+        # shellcheck disable=SC1091
+        . /etc/lsb-release
+        echo "${DISTRIB_ID}" | awk '{print tolower($0)}'
+        return 0
+    fi
+    return 1
+}
+
+detect_dist() {
+    if command -v lsb_release >/dev/null 2>&1; then
+        lsb_release --short --codename
+        return 0
+    fi
+    if [ -f /etc/lsb-release ]; then
+        # shellcheck disable=SC1091
+        . /etc/lsb-release
+        echo "${DISTRIB_CODENAME}"
+        return 0
+    fi
+    return 1
+}
+
+################################################################################
+
+trap cleanup EXIT
+export TMPDIR="${tmpdir}"
+export LC_ALL=C
+
+while [ 0 -lt "$#" ]; do
+    case "$1" in
+        -h | --help)
+            usage
+            exit "$?"
+            ;;
+        --account)
+            if [ -z "${2:-}" ]; then
+                die "missing argument: $1"
+            fi
+            export PACKAGECLOUD_ACCOUNT="$2"
+            shift
+            ;;
+        --repo)
+            if [ -z "${2:-}" ]; then
+                die "missing argument: $1"
+            fi
+            export PACKAGECLOUD_REPO="$2"
+            shift
+            ;;
+        --master-token)
+            if [ -z "${2:-}" ]; then
+                die "missing argument: $1"
+            fi
+            export PACKAGECLOUD_MASTER_TOKEN="$2"
+            shift
+            ;;
+        --os)
+            if [ -z "${2:-}" ]; then
+                die "missing argument: $1"
+            fi
+            export PACKAGECLOUD_OS="$2"
+            shift
+            ;;
+        --dist)
+            if [ -z "${2:-}" ]; then
+                die "missing argument: $1"
+            fi
+            export PACKAGECLOUD_DIST="$2"
+            shift
+            ;;
+        --unique-id)
+            if [ -z "${2:-}" ]; then
+                die "missing argument: $1"
+            fi
+            export PACKAGECLOUD_UNIQUE_ID="$2"
+            shift
+            ;;
+        --output-asc)
+            if [ -z "${2:-}" ]; then
+                die "missing argument: $1"
+            fi
+            export PACKAGECLOUD_OUTPUT_ASC="$2"
+            shift
+            ;;
+        --output-list)
+            if [ -z "${2:-}" ]; then
+                die "missing argument: $1"
+            fi
+            export PACKAGECLOUD_OUTPUT_LIST="$2"
+            shift
+            ;;
+        --output-auth)
+            if [ -z "${2:-}" ]; then
+                die "missing argument: $1"
+            fi
+            export PACKAGECLOUD_OUTPUT_AUTH="$2"
+            shift
+            ;;
+        *)
+            die "bad option: $1"
+            ;;
+    esac
+    shift
+done
+
+# PACKAGECLOUD_ACCOUNT
+if [ -n "${PACKAGECLOUD_ACCOUNT:-}" ]; then
+    readonly PACKAGECLOUD_ACCOUNT="${PACKAGECLOUD_ACCOUNT}"
+    info "PACKAGECLOUD_ACCOUNT: ${PACKAGECLOUD_ACCOUNT}"
+else
+    die "undefined PACKAGECLOUD_ACCOUNT"
+fi
+
+# PACKAGECLOUD_REPO
+if [ -n "${PACKAGECLOUD_REPO:-}" ]; then
+    readonly PACKAGECLOUD_REPO="${PACKAGECLOUD_REPO}"
+    info "PACKAGECLOUD_REPO: ${PACKAGECLOUD_REPO}"
+else
+    die "undefined PACKAGECLOUD_REPO"
+fi
+
+# PACKAGECLOUD_MASTER_TOKEN
+if [ -n "${PACKAGECLOUD_MASTER_TOKEN:-}" ]; then
+    readonly PACKAGECLOUD_MASTER_TOKEN="${PACKAGECLOUD_MASTER_TOKEN}"
+    info "PACKAGECLOUD_MASTER_TOKEN: ${PACKAGECLOUD_MASTER_TOKEN}"
+else
+    die "undefined PACKAGECLOUD_MASTER_TOKEN"
+fi
+
+# PACKAGECLOUD_OS
+if [ -n "${PACKAGECLOUD_OS:-}" ]; then
+    readonly PACKAGECLOUD_OS="${PACKAGECLOUD_OS}"
+    info "PACKAGECLOUD_OS: ${PACKAGECLOUD_OS}"
+elif PACKAGECLOUD_OS="$(detect_os)"; then
+    readonly PACKAGECLOUD_OS="${PACKAGECLOUD_OS}"
+    export PACKAGECLOUD_OS
+    warning "detected PACKAGECLOUD_OS: ${PACKAGECLOUD_OS}"
+else
+    die "undefined/undetected PACKAGECLOUD_OS"
+fi
+
+# PACKAGECLOUD_DIST
+if [ -n "${PACKAGECLOUD_DIST:-}" ]; then
+    readonly PACKAGECLOUD_DIST="${PACKAGECLOUD_DIST}"
+    info "PACKAGECLOUD_DIST: ${PACKAGECLOUD_DIST}"
+elif PACKAGECLOUD_DIST="$(detect_dist)"; then
+    readonly PACKAGECLOUD_DIST="${PACKAGECLOUD_DIST}"
+    export PACKAGECLOUD_DIST
+    warning "detected PACKAGECLOUD_DIST: ${PACKAGECLOUD_DIST}"
+else
+    die "undefined/undetected PACKAGECLOUD_DIST"
+fi
+
+# PACKAGECLOUD_UNIQUE_ID
+if [ -n "${PACKAGECLOUD_UNIQUE_ID:-}" ]; then
+    readonly PACKAGECLOUD_UNIQUE_ID="${PACKAGECLOUD_UNIQUE_ID}"
+    info "PACKAGECLOUD_UNIQUE_ID: ${PACKAGECLOUD_UNIQUE_ID}"
+else
+    PACKAGECLOUD_UNIQUE_ID="${SUDO_USER:-$(whoami)}@$(hostname -f)_$(date +%F)"
+    readonly PACKAGECLOUD_UNIQUE_ID="${PACKAGECLOUD_UNIQUE_ID}"
+    export PACKAGECLOUD_UNIQUE_ID
+    warning "defaulted PACKAGECLOUD_UNIQUE_ID: ${PACKAGECLOUD_UNIQUE_ID}"
+fi
+
+# PACKAGECLOUD_OUTPUT_ASC
+if [ -n "${PACKAGECLOUD_OUTPUT_ASC:-}" ]; then
+    readonly PACKAGECLOUD_OUTPUT_ASC="${PACKAGECLOUD_OUTPUT_ASC}"
+    info "PACKAGECLOUD_OUTPUT_ASC: ${PACKAGECLOUD_OUTPUT_ASC}"
+else
+    PACKAGECLOUD_OUTPUT_ASC="${PACKAGECLOUD_ACCOUNT}_${PACKAGECLOUD_REPO}.asc"
+    readonly PACKAGECLOUD_OUTPUT_ASC="${PACKAGECLOUD_OUTPUT_ASC}"
+    export PACKAGECLOUD_OUTPUT_ASC
+    warning "defaulted PACKAGECLOUD_OUTPUT_ASC: ${PACKAGECLOUD_OUTPUT_ASC}"
+fi
+
+# PACKAGECLOUD_OUTPUT_LIST
+if [ -n "${PACKAGECLOUD_OUTPUT_LIST:-}" ]; then
+    readonly PACKAGECLOUD_OUTPUT_LIST="${PACKAGECLOUD_OUTPUT_LIST}"
+    info "PACKAGECLOUD_OUTPUT_LIST: ${PACKAGECLOUD_OUTPUT_LIST}"
+else
+    PACKAGECLOUD_OUTPUT_LIST="${PACKAGECLOUD_ACCOUNT}_${PACKAGECLOUD_REPO}.list"
+    readonly PACKAGECLOUD_OUTPUT_LIST="${PACKAGECLOUD_OUTPUT_LIST}"
+    export PACKAGECLOUD_OUTPUT_LIST
+    warning "defaulted PACKAGECLOUD_OUTPUT_LIST: ${PACKAGECLOUD_OUTPUT_LIST}"
+fi
+
+# PACKAGECLOUD_OUTPUT_AUTH
+if [ -n "${PACKAGECLOUD_OUTPUT_AUTH:-}" ]; then
+    readonly PACKAGECLOUD_OUTPUT_AUTH="${PACKAGECLOUD_OUTPUT_AUTH}"
+    info "PACKAGECLOUD_OUTPUT_AUTH: ${PACKAGECLOUD_OUTPUT_AUTH}"
+else
+    PACKAGECLOUD_OUTPUT_AUTH="${PACKAGECLOUD_ACCOUNT}_${PACKAGECLOUD_REPO}.conf"
+    readonly PACKAGECLOUD_OUTPUT_AUTH="${PACKAGECLOUD_OUTPUT_AUTH}"
+    export PACKAGECLOUD_OUTPUT_AUTH
+    warning "defaulted PACKAGECLOUD_OUTPUT_AUTH: ${PACKAGECLOUD_OUTPUT_AUTH}"
+fi
+
+################################################################################
+
+if ! command -v curl >/dev/null 2>&1; then
+    die "missing command: curl"
+fi
+
+################################################################################
+
+##############################
+# WRITE ASCII-ARMORED PUBKEY #
+##############################
+
+readonly gpg_key_url_list="$(mktemp -t gpg_key_url_list.XXXXXX)"
+# https://packagecloud.io/realtime-robotics/rtr-robot-models/install#manual-deb
+curl -fsSLo "${gpg_key_url_list}" \
+    -XGET \
+    --user "${PACKAGECLOUD_MASTER_TOKEN}:" \
+    --data-urlencode "os=${PACKAGECLOUD_OS}" \
+    --data-urlencode "dist=${PACKAGECLOUD_DIST}" \
+    --data-urlencode "name=${PACKAGECLOUD_UNIQUE_ID}" \
+    "https://packagecloud.io/install/repositories/${PACKAGECLOUD_ACCOUNT}/${PACKAGECLOUD_REPO}/gpg_key_url.list"
+
+readonly gpg_key_url="$(xargs <"${gpg_key_url_list}")"
+info "gpg_key_url: ${gpg_key_url}"
+if ! read_token="$(grep -Eo '\b[[:xdigit:]]{48}\b' "${gpg_key_url_list}")"; then
+    die "failed to parse read_token: ${gpg_key_url_list}"
+fi
+readonly read_token="${read_token}"
+info "read_token: ${read_token}"
+
+curl -fsSLo "${PACKAGECLOUD_OUTPUT_ASC}" "${gpg_key_url}"
+info "wrote asc pubkey to: ${PACKAGECLOUD_OUTPUT_ASC}"
+
+################################################################################
+
+##########################
+# WRITE APT SOURCES LIST #
+##########################
+
+readonly config_file_list="$(mktemp -t config_file_list.XXXXXX)"
+# https://packagecloud.io/realtime-robotics/rtr-robot-models/install#manual-deb
+curl -fsSLo "${config_file_list}" \
+    -XGET \
+    --user "${PACKAGECLOUD_MASTER_TOKEN}:" \
+    --data-urlencode "os=${PACKAGECLOUD_OS}" \
+    --data-urlencode "dist=${PACKAGECLOUD_DIST}" \
+    --data-urlencode "name=${PACKAGECLOUD_UNIQUE_ID}" \
+    "https://packagecloud.io/install/repositories/${PACKAGECLOUD_ACCOUNT}/${PACKAGECLOUD_REPO}/config_file.list"
+
+if ! repo_uri="$(grep -Eom1 'https://[[:xdigit:]]{48}:@[[:graph:]]+' "${config_file_list}")"; then
+    die "failed to parse repo_uri: ${config_file_list}"
+fi
+readonly repo_uri="${repo_uri}"
+info "repo_uri: ${repo_uri}"
+readonly repo_url="${repo_uri#*:@}"
+info "repo_url: ${repo_url}"
+
+cat >"${PACKAGECLOUD_OUTPUT_LIST}" <<EOF
+# ${PACKAGECLOUD_OUTPUT_LIST}
+
+# this is a generated apt sources list file for a packagecloud.io repository
+
+# https://manpages.debian.org/stable/apt/sources.list.5.html
+
+# PACKAGECLOUD_ACCOUNT      : ${PACKAGECLOUD_ACCOUNT}
+# PACKAGECLOUD_REPO         : ${PACKAGECLOUD_REPO}
+# PACKAGECLOUD_MASTER_TOKEN : **$(echo "${PACKAGECLOUD_MASTER_TOKEN}" | cut -c44-)
+# PACKAGECLOUD_OS           : ${PACKAGECLOUD_OS}
+# PACKAGECLOUD_DIST         : ${PACKAGECLOUD_DIST}
+# PACKAGECLOUD_UNIQUE_ID    : ${PACKAGECLOUD_UNIQUE_ID}
+
+# hostname  : $(hostname)
+# user      : $(id)
+# generator : ${this}
+# date      : $(date -uIseconds)
+
+$(sed -n "/^deb/s,${read_token}:@,,gp" "${config_file_list}")
+
+EOF
+
+info "wrote apt list to: ${PACKAGECLOUD_OUTPUT_LIST}"
+
+################################################################################
+
+#######################
+# WRITE APT AUTH CONF #
+#######################
+
+cat >"${PACKAGECLOUD_OUTPUT_AUTH}" <<EOF
+# ${PACKAGECLOUD_OUTPUT_AUTH}
+
+# this is a generated apt auth config file for a packagecloud.io repository
+
+# https://manpages.debian.org/stable/apt/apt_auth.conf.5.html
+
+# PACKAGECLOUD_ACCOUNT      : ${PACKAGECLOUD_ACCOUNT}
+# PACKAGECLOUD_REPO         : ${PACKAGECLOUD_REPO}
+# PACKAGECLOUD_MASTER_TOKEN : **$(echo "${PACKAGECLOUD_MASTER_TOKEN}" | cut -c44-)
+# PACKAGECLOUD_OS           : ${PACKAGECLOUD_OS}
+# PACKAGECLOUD_DIST         : ${PACKAGECLOUD_DIST}
+# PACKAGECLOUD_UNIQUE_ID    : ${PACKAGECLOUD_UNIQUE_ID}
+
+# hostname  : $(hostname)
+# user      : $(id)
+# generator : ${this}
+# date      : $(date -uIseconds)
+
+machine ${repo_url}
+login ${read_token}
+password
+
+EOF
+
+exit "$?"

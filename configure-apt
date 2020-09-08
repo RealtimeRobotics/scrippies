@@ -5,6 +5,7 @@
 set -eu
 
 readonly this="$(readlink -f "$0")"
+readonly here="$(dirname "$0")"
 readonly whatami="$(basename "${this}")"
 readonly tmpdir="$(mktemp -dt "${whatami}.XXXXXX")"
 
@@ -69,24 +70,28 @@ apt_config_path() {
     cut -d= -f2 | xargs -n1 | paste -sd/ | xargs readlink -f
 }
 
-etc_apt_sources_list() {
-    apt-config shell _ Dir _ Dir::Etc _ Dir::Etc::sourcelist | apt_config_path
+# /etc/apt/trusted.gpg.d/*.asc
+etc_apt_trusted_gpg_d() {
+    # https://manpages.debian.org/stable/apt/apt-key.8.en.html
+    apt-config shell _ Dir _ Dir::Etc _ Dir::Etc::trustedparts | apt_config_path
 }
 
+# /etc/apt/sources.list.d/*.list
 etc_apt_sources_list_d() {
+    # https://manpages.debian.org/stable/apt/sources.list.5.en.html
     apt-config shell _ Dir _ Dir::Etc _ Dir::Etc::sourceparts | apt_config_path
 }
 
+# /etc/apt/auth.conf.d/*.conf
+etc_apt_auth_conf_d() {
+    # https://manpages.debian.org/stable/apt/apt_auth.conf.5.en.html
+    apt-config shell _ Dir _ Dir::Etc _ Dir::Etc::netrcparts | apt_config_path
+}
+
+# /etc/apt/apt.conf.d/*
 etc_apt_apt_conf_d() {
+    # https://manpages.debian.org/stable/apt/apt.conf.5.en.html
     apt-config shell _ Dir _ Dir::Etc _ Dir::Etc::parts | apt_config_path
-}
-
-etc_apt_preferences_d() {
-    apt-config shell _ Dir _ Dir::Etc _ Dir::Etc::preferencesparts | apt_config_path
-}
-
-etc_apt_trusted_gpg_d() {
-    apt-config shell _ Dir _ Dir::Etc _ Dir::Etc::trustedparts | apt_config_path
 }
 
 detect_distribution() {
@@ -248,6 +253,127 @@ else
         readonly use_network="public"
     fi
     warning "discovered use_network: ${use_network}"
+fi
+
+################################################################################
+
+#########################################
+# ##################################### #
+# # PACKAGECLOUD.IO REALTIME-ROBOTICS # #
+# ##################################### #
+#########################################
+
+################################################################################
+
+######################################################
+# PACKAGECLOUD.IO REALTIME-ROBOTICS RTR-ROBOT-MODELS #
+######################################################
+
+if [ "private" = "${use_network:-public}" ]; then
+    # pub   rsa4096 2020-08-26 [SCEA]
+    #       423D522AA23B50C66F214F97219EACCE6579994C
+    # uid           [ultimate] https://packagecloud.io/realtime-robotics/rtr-robot-models (https://packagecloud.io/docs#gpg_signing) <support@packagecloud.io>
+    # sub   rsa4096 2020-08-26 [SEA]
+    cat >"$(etc_apt_trusted_gpg_d)/realtime-robotics_rtr-robot-models.asc" <<'EOF'
+-----BEGIN PGP PUBLIC KEY BLOCK-----
+
+mQINBF9Giu0BEADjXY5nJpqEIbF7XlwybUdREHhu6315m1GjyfkP5RkIhoiJQGbu
+XLA6yjhk70XEESMIfyMlBe/zvAkLKCChN+p+gPZgEsEFL0VSxz4rC3u6cQJUk/0j
+zDMtM1wgWiccZPOvg/6WC6NBPPKHDnGfBS+3OUblc/R8bbXZizEPVGJpjKHp0jox
+KpF2R9xjxY9NTs/KE9EVjwWUvG6dD0L+gt4ViYhleU0KmmFJLGRGEV04W8W5eedz
+bbLqJrp5t1PpTvCIaS/OvhMoZKPqZ31n+q3x1HO9mcjTVJJvddUP9G0Q8uPHG4oH
+Qk23QA0Pdg7qEDvoDi246BNM96AJJPgQkiieFKEK12Hg8CeiYkuVM7XP5xHoGjkA
+g+a1d8O3kAU8bfMJgWk5Ef3FU2gFD7Qd3zKCChFYm1F8eJxtksIt4JBapKO5NCt0
+E3iKouMtmX4bbuCu+S0C71sGxTTy0qpKtKc+UxFj214h1HraXXMLHH9wfp07TlT6
+ZZ8/37Kti4bV86HOii7ePyIbBd6qEMoccS3OR9PiL4b2YNAzGPP3b5ym3ggtZtXF
+e6mXG+zDXogpZQdKBiFtkqLLFkup8FV6ZyuwmYIj4uKjm9tSPkzdsyeLokJ7QavE
+3nahWaGs/wWpeEfRCS5tUlIr+Hg5d9LaVzb4jdl+twdl/3zoV+/sBfPpwQARAQAB
+tH9odHRwczovL3BhY2thZ2VjbG91ZC5pby9yZWFsdGltZS1yb2JvdGljcy9ydHIt
+cm9ib3QtbW9kZWxzIChodHRwczovL3BhY2thZ2VjbG91ZC5pby9kb2NzI2dwZ19z
+aWduaW5nKSA8c3VwcG9ydEBwYWNrYWdlY2xvdWQuaW8+iQJOBBMBCgA4FiEEQj1S
+KqI7UMZvIU+XIZ6szmV5mUwFAl9Giu0CGy8FCwkIBwIGFQoJCAsCBBYCAwECHgEC
+F4AACgkQIZ6szmV5mUzrlxAA1aBLJ/aiP0R7bC/bCDWcyB4peilCa9D21sfdhfxL
+uyriJVxJePEWD+WUvKtsO1mKTjOaGtLbD+y593JL2uGNsQs+pf4/L/v6PwLXjogh
+e5Z85Vb0pzQhvov05iDMsKAHZ2XsryHrzB+vBQSg5mAjhS7P9Mfn3j/DEvURYP9Q
+hyxfWJXl2uJlLHot2noyNOG3D45JOzRpGQ5r3XkQ9zrzH/KysGY2hWJplJVJEYxB
+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
+=e8DN
+-----END PGP PUBLIC KEY BLOCK-----
+EOF
+    readonly rtr_robot_models_repo_uri="http://apt.realtime.cxm/apt/realtime-robotics/rtr-robot-models/${distribution}"
+    readonly rtr_robot_models_atyp_list="$(mktemp -t rtr_robot_models_atyp_list.XXXXXX)"
+    cat >"${rtr_robot_models_atyp_list}" <<'EOF'
+deb
+deb-src
+EOF
+    readonly rtr_robot_models_dist_list="$(mktemp -t rtr_robot_models_dist_list.XXXXXX)"
+    cat >"${rtr_robot_models_dist_list}" <<EOF
+${distribution}
+EOF
+    readonly rtr_robot_models_comp_list="$(mktemp -t rtr_robot_models_comp_list.XXXXXX)"
+    cat >"${rtr_robot_models_comp_list}" <<'EOF'
+main
+EOF
+    setup_apt_list \
+        "${rtr_robot_models_repo_uri}" \
+        "${rtr_robot_models_atyp_list}" \
+        "${rtr_robot_models_dist_list}" \
+        "${rtr_robot_models_comp_list}"
+else
+    if ! [ -x "${here}/packagecloud-apt" ]; then
+        die "missing executable: ${here}/packagecloud-apt"
+    fi
+    if [ -z "${RTR_ROBOT_MODELS_MASTER_TOKEN+x}" ]; then
+        die "undefined/empty RTR_ROBOT_MODELS_MASTER_TOKEN"
+    fi
+    "${here}/packagecloud-apt" \
+        --master-token "${RTR_ROBOT_MODELS_MASTER_TOKEN}" \
+        --account "realtime-robotics" \
+        --repo "rtr-robot-models" \
+        --output-asc "$(etc_apt_trusted_gpg_d)/realtime-robotics_rtr-robot-models.asc" \
+        --output-list "$(etc_apt_sources_list_d)/realtime-robotics_rtr-robot-models.list" \
+        --output-auth "$(etc_apt_auth_conf_d)/realtime-robotics_rtr-robot-models.conf"
 fi
 
 ################################################################################
