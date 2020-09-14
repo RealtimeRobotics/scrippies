@@ -1,0 +1,180 @@
+#!/bin/sh
+
+# scrippies/docker-packagecloud
+
+set -euvx
+
+readonly this="$(readlink -f "$0")"
+readonly here="$(dirname "${this}")"
+readonly whatami="$(basename "${this}")"
+readonly tmpdir="$(mktemp -dt DRE.XXXXXX)"
+
+log() { echo "${whatami}[$$]: $*" >&2; }
+error() { log "ERROR: $*"; }
+warning() { log "WARNING: $*"; }
+info() { log "INFO: $*"; }
+
+die() {
+    error "$@"
+    usage >&2
+    exit 1
+}
+
+cleanup() {
+    status="$?"
+    rm -rf "${tmpdir}" || true
+    if command -v docker >/dev/null 2>&1; then
+        docker system prune --force --filter until=6h >&2 || true
+    fi
+    return "${status}"
+}
+
+usage() {
+    cat <<EOF
+
+Usage: $0 [PACKAGE_CLOUD_ARGS]...
+Dockerize a package_cloud invocation.
+
+Notes:
+
+    * Requires the following environment variables:
+
+        * PACKAGECLOUD_TOKEN : packagecloud API access token
+          https://packagecloud.io/api_token
+
+Examples:
+
+    \$ $0 help
+
+    \$ $0 push user/repo/distro/version path/to/my.deb
+
+    \$ $0 master_token create username/reponame master_token_name
+
+EOF
+}
+
+vet_workdir() {
+    # shellcheck disable=SC2039
+    local result=""
+    if ! result="$(readlink -f "$1")"; then
+        error "bad path: $1"
+        return 1
+    fi
+    if ! [ -d "${result}" ]; then
+        error "not a directory: ${result}"
+        return 1
+    fi
+    echo "${result}"
+    return 0
+}
+
+# https://stackoverflow.com/questions/23513045/how-to-check-if-a-process-is-running-inside-docker-container
+# https://stackoverflow.com/questions/20010199/how-to-determine-if-a-process-runs-inside-lxc-docker
+is_in_container() { grep -q 'lxc\|docker' /proc/1/cgroup; }
+
+# https://www.etalabs.net/sh_tricks.html : "Working with arrays"
+save_args() {
+    for i; do
+        printf %s\\n "$i" | sed "s/'/'\\\\''/g;1s/^/'/;\$s/\$/' \\\\/"
+    done
+    echo " "
+}
+
+# https://www.etalabs.net/sh_tricks.html : "Shell-quoting arbitrary strings"
+quote() {
+    printf %s\\n "$1" | sed "s/'/'\\\\''/g;1s/^/'/;\$s/\$/'/"
+}
+
+################################################################################
+
+trap cleanup EXIT
+export TMPDIR="${tmpdir}"
+export LC_ALL=C
+saved_args=$(save_args "$@")
+
+if [ -z "${PACKAGECLOUD_TOKEN+x}" ]; then
+    die "undefined PACKAGECLOUD_TOKEN"
+fi
+
+################################################################################
+
+if ! tty; then
+    # no tty, so abuse `script` to get one
+    # https://stackoverflow.com/questions/32910661/pretend-to-be-a-tty-in-bash-for-any-command/32981392#32981392
+    eval "set -- ${saved_args}"
+    script -qfec "${this} $*" /dev/null
+    exit "$?"
+fi
+
+########################
+# NOW RUNNING WITH TTY #
+########################
+
+# https://stackoverflow.com/questions/23513045/how-to-check-if-a-process-is-running-inside-docker-container
+# https://stackoverflow.com/questions/20010199/how-to-determine-if-a-process-runs-inside-lxc-docker
+if ! is_in_container; then
+    readonly image_name="ruby:latest"
+    if [ "true" = "${DOCKER_IMAGE_PULL:-false}" ] \
+        || ! docker image inspect "${image_name}" >/dev/null 2>&1; then
+        docker image pull "${image_name}"
+    else
+        warning "skipping: docker image pull ${image_name}"
+    fi
+    docker image inspect "${image_name}"
+
+    # shellcheck disable=SC2046
+    docker container run \
+        --entrypoint "/bin/sh" \
+        --env DEBCONF_NONINTERACTIVE_SEEN=true \
+        --env DEBEMAIL="${DEBEMAIL:-}" \
+        --env DEBFULLNAME="${DEBFULLNAME:-}" \
+        --env DEBIAN_FRONTEND=noninteractive \
+        --env DH_COLORS="${DH_COLORS:-never}" \
+        --env DOCKER_HOST_GID="$(id -g)" \
+        --env DOCKER_HOST_UID="$(id -u)" \
+        --env DPKG_COLORS="${DPKG_COLORS:-never}" \
+        --env HERE="${here}" \
+        --env NO_COLOR="${NO_COLOR:-1}" \
+        --env PACKAGECLOUD_TOKEN \
+        --env TERM=dumb \
+        --env THIS="${this}" \
+        --env TMPDIR="${tmpdir}" \
+        --interactive \
+        --mount readonly,type=bind,source="${PWD}",target="${PWD}" \
+        --mount readonly,type=bind,source="${this}",target="${this}" \
+        --mount type=bind,source="${tmpdir}",target="${tmpdir}" \
+        --rm \
+        --tty \
+        --workdir "${PWD}" \
+        "${image_name}" \
+        "${this}" "$@"
+    exit "$?"
+fi
+
+############################
+# NOW INSIDE THE CONTAINER #
+############################
+
+if [ 0 -eq "$(id -u)" ]; then
+    # running as root
+    gem install package_cloud
+
+    # create luser account
+    groupadd -g "${DOCKER_HOST_GID}" luser
+    useradd -m -u"${DOCKER_HOST_UID}" -g"${DOCKER_HOST_GID}" -s"$(command -v sh)" luser
+
+    chmod -v 1777 "${tmpdir}"
+    eval "set -- ${saved_args}"
+    su luser -- "${this}" "$@"
+    exit "$?"
+fi
+
+########################
+# NOW RUNNING AS LUSER #
+########################
+
+eval "set -- ${saved_args}"
+first="$1"
+shift
+package_cloud "${first}" "$@"
+exit "$?"
