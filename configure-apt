@@ -635,6 +635,69 @@ setup_apt_list \
 
 ################################################################################
 
+################
+# INTEL-OPENCL #
+################
+
+# pub   rsa4096 2018-07-30 [SC]
+#       E75D0B33338407411D357F51B9732172C4830B8F
+# uid           [ unknown] Launchpad PPA for Intel OpenCL Neo team
+cat >"$(etc_apt_trusted_gpg_d)/0xe75d0b33338407411d357f51b9732172c4830b8f.asc" <<'EOF'
+-----BEGIN PGP PUBLIC KEY BLOCK-----
+
+mQINBFtfLLEBEACcIu2ICEu3biKqm1FvkBDdO1KQSVUbVm6wq0WndNy4+rOm/w2h
+OilkFanqS8SxhzO+GwciEuzjf/guvtDCWNuOHiGlXTzQqiCLx1DPWXMrU80SQxpN
+iyZflrB9K4BmJFHjv3xVWEgJgYly27Yd+j1muTLreT+cdmWmPKqP5sGWIbaJmXsf
+kLRvXn7u+UQ1za7ArDUzcJLN07nID6gvNY8w+fKxcvAUv17oZz+UkDQ63wveZbxZ
+o/gpxhDwRJQXNEslxIdx5rLtBM2O363lhr8cuCmvLR4nZPbyVEQ5REV3igdISvEU
+Ht/oL1Zp0fwvW8kD9iJUxcIluVxkNjEvp4yNfC7DB6yqptyZ0FTaAivqHhBU/XCY
+cCrroLFiC5ePnjk/Vk+CRd/SF/uDUsJ8ToLLemQV8tFQwnMsYxSV7Fby5lzYMejp
+CbllsmguhwNnjmUTgDaT6rIlpMIR1AUcBKnlNIyPcY1YjmcfW13io4JS8IpiGSrx
+KxZ3Pl+nhWK+YPXZId0+tZOECBRojZwm+x4+IIKNHIoJgYUWg6nODPyvY8mNTEr0
+h1ErSNiFbQFKnIE8s92VU1wHqnd2ezUySg/R4kS7WJZ/W6HB8uC9+5YcM2Jin2vi
++cVzJyZYkbwGV2kqzBswd1OYr7CMS0EIaynNpLXaLhtRkX+DO7AMAocGZQARAQAB
+tCdMYXVuY2hwYWQgUFBBIGZvciBJbnRlbCBPcGVuQ0wgTmVvIHRlYW2JAjgEEwEC
+ACIFAltfLLECGwMGCwkIBwMCBhUIAgkKCwQWAgMBAh4BAheAAAoJELlzIXLEgwuP
+t30P/j5KzVSvRxKAmOcoFR19YZed9vTtG3WNSc+9sru1VDC1oX9HAxQQSxYc5VBe
+C55PyavCZpKn+4I1DtL7RWzNwG3wiGIgoP0vgflZOPJeVeoMkNOc8KVVzDmCLe3z
+fxQKoQftTStVNP08UzsXR8Pz4TJS9HlfQznT0SQ6MajdXS/H+V+/+HKtXWR1JBbv
+iXJx4yVn76agrT+wIWlDBjx8ZuihxfEmK+w/joAJya5jY7q/21j5zgEUDzNRhE2A
+bD/2eiPY51fOcfylrcAp11dwbB894aQrqzBoI/ji2GnFNrmrwc/eeUUpH8NdOwwG
+RRPlL6Y2+VFD1F85l7Qw41JqlfDQhZ4I+hJGX8Mzi0Re4M+rLSZoah2m8sPfUwv1
+Vs1ybMNJlIdC/+WVzLBmyuv8iBnUEfOuX+50oMLW9q8XACBUGE/TaD9yvf87L9ds
+iPomeKqJRFp9Wa44TTHyCzoL+uTsAhaHlDt8AZqQQQuyJ39xWcnPw1pKVeBB4Xj1
+IROuLpD0Ibszu5ioQ+GBtuy6n3KBpVK+oijFi57KuCYQsYqKSSk0d6smO74JeH+Q
+FwVQHVaqBkocUBeXkKZdm7CjDBhPdhMs1ClHo+fTqMfukiNaNYSuLU8d7ztq61/X
+HZNM11NOI6Bq2m0PIs1086JAhrkGopucVuB4hwd1bAal36ws
+=hyQ0
+-----END PGP PUBLIC KEY BLOCK-----
+EOF
+if [ "private" = "${use_network:-public}" ]; then
+    readonly intel_opencl_repo_uri="http://apt.realtime.cxm/apt/intel-opencl/${distribution}"
+else
+    readonly intel_opencl_repo_uri="http://ppa.launchpad.net/intel-opencl/intel-opencl/ubuntu"
+fi
+readonly intel_opencl_atyp_list="$(mktemp -t intel_opencl_atyp_list.XXXXXX)"
+cat >"${intel_opencl_atyp_list}" <<'EOF'
+deb
+deb-src
+EOF
+readonly intel_opencl_dist_list="$(mktemp -t intel_opencl_dist_list.XXXXXX)"
+cat >"${intel_opencl_dist_list}" <<EOF
+${distribution}
+EOF
+readonly intel_opencl_comp_list="$(mktemp -t intel_opencl_comp_list.XXXXXX)"
+cat >"${intel_opencl_comp_list}" <<'EOF'
+main
+EOF
+setup_apt_list \
+    "${intel_opencl_repo_uri}" \
+    "${intel_opencl_atyp_list}" \
+    "${intel_opencl_dist_list}" \
+    "${intel_opencl_comp_list}"
+
+################################################################################
+
 #############
 # REALSENSE #
 #############
