@@ -627,11 +627,14 @@ readonly node_14_x_comp_list="$(mktemp -t node_14_x_comp_list.XXXXXX)"
 cat >"${node_14_x_comp_list}" <<'EOF'
 main
 EOF
-setup_apt_list \
-    "${node_14_x_repo_uri}" \
-    "${node_14_x_atyp_list}" \
-    "${node_14_x_dist_list}" \
-    "${node_14_x_comp_list}"
+# TODO(neil): reinstate this after closing RAPID-5342
+if false; then
+    setup_apt_list \
+        "${node_14_x_repo_uri}" \
+        "${node_14_x_atyp_list}" \
+        "${node_14_x_dist_list}" \
+        "${node_14_x_comp_list}"
+fi
 
 ################################################################################
 
