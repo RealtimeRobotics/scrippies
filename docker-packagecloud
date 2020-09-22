@@ -122,6 +122,7 @@ if ! is_in_container; then
     fi
     docker image inspect "${image_name}"
 
+    eval "set -- ${saved_args}"
     # shellcheck disable=SC2046
     docker container run \
         --entrypoint "/bin/sh" \
