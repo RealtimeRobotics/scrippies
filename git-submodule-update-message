@@ -117,7 +117,7 @@ while read sm_path; do
            >>"${sm_path_begin_end_list}"
 done <"${sm_path_list}"
 
-printf "submodule update: $(cut -f1 <"${sm_path_begin_end_list}" | paste -sd,)\n"
+echo "submodule update: $(xargs printf '%s (%.7s -> %.7s)\n' <"${sm_path_begin_end_list}" | paste -sd,)"
 while read sm_path begin end; do
     printf "\n${sm_path} (${begin} -> ${end}):\n"
     git --no-pager -C "${workdir}/${sm_path}" log --oneline --stat=80 "${begin}"..."${end}"
