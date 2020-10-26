@@ -93,9 +93,6 @@ while [ 0 -lt "$#" ]; do
             readonly workdir="${workdir}"
             shift
             ;;
-        -n | --dry-run)
-            readonly requested_dry_run="true"
-            ;;
         --major)
             readonly bump="major"
             ;;
@@ -173,24 +170,18 @@ esac
 readonly new_triplet="${new_major}.${new_minor}.${new_patch}"
 info "new_triplet: ${new_triplet}"
 
-readonly old_debian_changelog="$(mktemp -ut old_debian_changelog.XXXXXX)"
-readonly new_debian_changelog="$(mktemp -ut new_debian_changelog.XXXXXX)"
-cp "${workdir}/debian/changelog" "${old_debian_changelog}"
-cp "${workdir}/debian/changelog" "${new_debian_changelog}"
-
-dch -c "${new_debian_changelog}" -v "${new_triplet}" "${@:-version ${new_triplet}}"
-dch -c "${new_debian_changelog}" -r ""
-info "diff:"
-diff "${old_debian_changelog}" "${new_debian_changelog}" | while read -r line; do
-    info "    ${line}"
-done
-
-if [ "true" = "${requested_dry_run:-false}" ]; then
-    info "requested dry run; not modified: ${workdir}/debian/changelog"
-    exit "$?"
+if command -v gbp >/dev/null 2>&1; then
+    gbp dch \
+        --verbose \
+        --ignore-branch \
+        --release \
+        --spawn-editor=never \
+        --new-version="${new_triplet}"
+else
+    # TODO(neil): maybe make an effort to put commit messages into the
+    # changelog like gbp-dch
+    dch --newversion="${new_triplet}" "${@:-version ${new_triplet}}"
+    dch --release ""
 fi
-
-cp "${new_debian_changelog}" "${workdir}/debian/changelog"
-info "modified: ${workdir}/debian/changes"
 
 exit "$?"
