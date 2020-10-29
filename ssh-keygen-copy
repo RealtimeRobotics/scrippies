@@ -112,16 +112,18 @@ readonly khosts="${HOME}/.ssh/kh_${1}"
 readonly prikey="${HOME}/.ssh/id_${1}"
 readonly pubkey="${HOME}/.ssh/id_${1}.pub"
 
-if ! [ -f "${khosts}" ]; then
-    ssh-keyscan "${1#*@}" >"${khosts}"
+if [ -f "${khosts}" ]; then
+    warning "extant known hosts: ${khosts}"
 else
-    warning "file exists: ${khosts}"
+    info "creating known hosts: ${khosts}"
+    ssh-keyscan -4 "${1#*@}" >"${khosts}"
 fi
 
-if ! [ -f "${prikey}" ]; then
-    ssh-keygen -vvv -N '' -C "${prikey}" -f "${prikey}"
+if [ -f "${prikey}" ]; then
+    warning "extant private key: ${prikey}"
 else
-    warning "file exists: ${prikey}"
+    info "creating private key: ${prikey}"
+    ssh-keygen -vvv -N '' -C "${prikey}" -f "${prikey}"
 fi
 
 if ! [ -f "${pubkey}" ]; then
