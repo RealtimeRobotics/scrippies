@@ -1,0 +1,95 @@
+#!/bin/sh
+
+# scrippies/delete-kernel
+
+set -euvx
+
+readonly this="$(readlink -f "$0")"
+readonly whatami="$(basename "${this}")"
+readonly tmpdir="$(mktemp -dt "${whatami}.XXXXXX")"
+
+log() { echo "${whatami}[$$]: $*" >&2; }
+error() { log "ERROR: $*"; }
+warning() { log "WARNING: $*"; }
+info() { log "INFO: $*"; }
+
+die() {
+    error "$@"
+    usage >&2
+    exit 1
+}
+
+cleanup() {
+    status="$?"
+    rm -rf "${tmpdir}" || true
+    return "${status}"
+}
+
+usage() {
+    cat <<EOF
+
+Usage: $0 [OPTION]... KERNEL_VERSION
+For the given kernel version, remove its associated packages and files.
+
+Options
+
+    -h            print this usage and return success
+
+Examples:
+
+    \$ $0 5.4.0-48-generic
+
+EOF
+}
+
+################################################################################
+
+trap cleanup EXIT
+export TMPDIR="${tmpdir}"
+export LC_ALL=C
+
+if ! [ 0 -eq "$(id -u)" ]; then
+    sudo "${this}" "$@"
+    exit "$?"
+fi
+
+if ! [ 1 -eq "$#" ]; then
+    die "bad args"
+fi
+
+readonly path_list="$(mktemp -t path_list.XXXXXX)"
+{
+    # https://askubuntu.com/questions/594443/how-can-i-remove-compiled-kernel/594484#594484
+    find /boot \
+        -maxdepth 1 -type f \
+        \( -false \
+        -o -name "System.map-$1" \
+        -o -name "config-$1" \
+        -o -name "initrd.img-$1" \
+        -o -name "vmlinuz-$1" \
+        \)
+    find /lib/modules /var/lib/initramfs-tools \
+        -maxdepth 1 -name "$1"
+} | sort -u >"${path_list}"
+cat -n "${path_list}" >&2
+
+if [ -s "${path_list}" ]; then
+    xargs ls -lahd <"${path_list}"
+else
+    die "missing files for kernel version: $1"
+fi
+
+readonly pkg_list="$(mktemp -t pkg_list.XXXXXX)"
+xargs dpkg -S <"${path_list}" \
+    | sed -r 's|^([^:]*):.*|\1|g;s|, |\n|g' \
+    | sort -u >"${pkg_list}"
+cat -n "${pkg_list}" >&2
+
+if [ -s "${pkg_list}" ]; then
+    xargs apt-get remove --yes --purge <"${pkg_list}"
+    update-grub
+else
+    warning "no package(s): $(paste -sd, <"${path_list}")"
+fi
+
+exit "$?"
