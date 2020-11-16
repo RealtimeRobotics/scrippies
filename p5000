@@ -1,0 +1,92 @@
+#!/bin/sh
+
+# scrippies/p5000
+
+set -eu
+
+readonly this="$(readlink -f "$0")"
+readonly whatami="$(basename "${this}")"
+
+readonly default_stress_options="$(
+    paste -sd' ' <<EOF
+--cpu $(nproc)
+--io $(nproc)
+--vm $(nproc)
+EOF
+)"
+
+log() { echo "${whatami}[$$]: $*" >&2; }
+error() { log "ERROR: $*"; }
+warning() { log "WARNING: $*"; }
+info() { log "INFO: $*"; }
+
+die() {
+    error "$*"
+    usage >&2
+    exit 1
+}
+
+usage() {
+    cat <<EOF
+
+Usage: $0 [-h] [-- [STRESS_OPTION]...]
+P-5000 Power Loader: mechanized exoskeleton for system loading.
+
+Options:
+
+    -h    print usage and exit
+
+Stress options:
+
+    default: ${default_stress_options}
+
+    For more information, refer to the stress man page (man 1 stress).
+
+Examples:
+
+    \$ $0 -h
+
+    \$ $0 -- --help
+
+    \$ $0 -- --timeout 60
+
+    \$ $0 -- --cpu 1
+
+    \$ $0 -- --io 2
+
+    \$ $0 -- --vm 3
+
+    \$ $0 -- --hdd 4
+
+    \$ $0 -- --cpu 8 --io 4 --vm 2 --vm-bytes 128M --timeout 10s
+
+EOF
+}
+
+################################################################################
+
+export LC_ALL=C
+
+while getopts ":h" opt; do
+    case "${opt}" in
+        h)
+            usage
+            exit 0
+            ;;
+        :) die "missing argument: -${OPTARG}" ;;
+        \?) die "bad option: -${OPTARG}" ;;
+    esac
+done
+shift "$((OPTIND - 1))"
+
+if ! dpkg --status stress >/dev/null 2>&1; then
+    die "missing package: stress"
+fi
+
+if ! command -v stress >/dev/null 2>&1; then
+    die "missing command: stress"
+fi
+
+eval "set -- ${*:-${default_stress_options}}"
+
+exec stress "$@"
