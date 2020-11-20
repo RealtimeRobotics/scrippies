@@ -59,7 +59,7 @@ Notes:
 
   * works well with the following ssh config snippet:
 
-    Host \$1
+    Host \${1#*@}
     User \${1%@*}
     IdentityFile ~/.ssh/id_\$1
     UserKnownHostsFile ~/.ssh/kh_\$1
