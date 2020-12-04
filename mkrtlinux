@@ -1,0 +1,213 @@
+#!/bin/sh
+
+# scrippies/mkrtlinux
+
+set -euvx
+
+readonly this="$(readlink -f "$0")"
+readonly whatami="$(basename "${this}")"
+readonly tmpdir="$(mktemp -dt "${whatami}.XXXXXX")"
+
+readonly cachedir="${PWD}/cache.d"
+
+readonly default_version="4.16"
+
+log() { echo "${whatami}[$$]: $*" >&2; }
+error() { log "ERROR: $*"; }
+warning() { log "WARNING: $*"; }
+info() { log "INFO: $*"; }
+
+die() {
+    error "$@"
+    usage >&2
+    exit 1
+}
+
+cleanup() {
+    status="$?"
+    rm -rf "${tmpdir}" || true
+    if command -v docker >/dev/null 2>&1; then
+        docker system prune --force --filter until=6h || true
+        docker volume prune -f || true
+    fi
+    return "${status}"
+}
+
+usage() {
+    cat <<EOF
+
+Usage: $0 [OPTION]... [-- MAKE_ARG...]
+Build a Debian package for a PREEMPTRT-patched linux kernel.
+
+Options:
+
+    -h            print this usage and return success
+    -V VERSION    patch and build VERSION (default: ${default_version})
+
+Examples:
+
+    \$ $0 -h
+
+    \$ $0 
+
+    \$ $0 -V 5.6
+
+Notes:
+
+    * VERSION must be of the form MAJOR.MINOR
+
+    * VERSION must be 3.0 or later
+
+EOF
+}
+
+vet_version() {
+    echo "$1" | grep -Exm1 '[[:digit:]]+.[[:digit:]]+'
+}
+
+# $1 : uri
+uri_dest() {
+    echo "${cachedir}/${1#*://}"
+}
+
+# $1 : uri
+wget_cache() {
+    wget \
+        --no-clobber \
+        --force-directories \
+        --directory-prefix="${cachedir}" \
+        "$1"
+}
+
+# $1 : uri
+wget_cache_gpgv() (
+    wget_cache "$1"
+    wget_cache "$(dirname "$1")/sha256sums.asc"
+    cd "$(dirname "$(uri_dest "$1")")"
+    gpg -vv --verify --trust-model=always --output=- sha256sums.asc >"sha256sums"
+    sha256sum --check --ignore-missing "sha256sums"
+)
+
+# $1 : flag_path
+# rest : command
+unless_exists_eval() {
+    # shellcheck disable=SC2039
+    local flag_path="$1"
+    shift
+    if [ -e "${flag_path}" ]; then
+        info "already done: $*"
+        return 0
+    fi
+    eval "$@"
+    touch "${flag_path}"
+}
+
+################################################################################
+
+trap cleanup EXIT
+export TMPDIR="${tmpdir}"
+export LC_ALL=C
+
+if [ -z "${DEBFULLNAME:-}" ]; then
+    die "undefined environement variable: DEBFULLNAME"
+fi
+if [ -z "${DEBEMAIL:-}" ]; then
+    die "undefined environement variable: DEBEMAIL"
+fi
+
+while getopts ":hV:" opt; do
+    case "${opt}" in
+        h)
+            usage
+            exit 0
+            ;;
+        V)
+            if ! version="$(vet_version "${OPTARG}")"; then
+                die "FAILURE: vet_version ${OPTARG}"
+            fi
+            readonly version="${version}"
+            ;;
+        :) die "missing argument: -${OPTARG}" ;;
+        \?) die "bad option: -${OPTARG}" ;;
+    esac
+done
+shift "$((OPTIND - 1))"
+
+# version
+if [ -n "${version:-}" ]; then
+    info "version: ${version}"
+else
+    readonly version="${default_version}"
+    warning "defaulting version: ${version}"
+fi
+
+################################################################################
+
+readonly patch_index_uri="https://www.kernel.org/pub/linux/kernel/projects/rt/${version}/"
+info "patch_index_uri: ${patch_index_uri}"
+readonly patch_index_file="$(uri_dest "${patch_index_uri}")index.html"
+info "patch_index_file: ${patch_index_file}"
+wget_cache "${patch_index_uri}"
+
+readonly patch_xz_basename="$(
+    grep -Eo '[[:alnum:]_.-]+[.]patch[.]xz' "${patch_index_file}" \
+        | sort -uV \
+        | tail -1
+)"
+if [ -z "${patch_xz_basename}" ]; then
+    die "failed to parse patch_xz_basename: ${patch_index_file}"
+fi
+info "patch_xz_basename: ${patch_xz_basename}"
+
+readonly patch_xz_uri="${patch_index_uri}${patch_xz_basename}"
+info "patch_xz_uri: ${patch_xz_uri}"
+readonly patch_xz_file="$(uri_dest "${patch_xz_uri}")"
+info "patch_xz_file: ${patch_xz_file}"
+wget_cache_gpgv "${patch_xz_uri}"
+
+readonly patch_file="${patch_xz_file%.xz}"
+unless_exists_eval "${patch_file}" xz -vkd "${patch_xz_file}"
+
+if ! version_triplet="$(basename "${patch_file}" | grep -Eo '[[:digit:]]+\.[[:digit:]]+\.[[:digit:]]+')"; then
+    die "failed to parse version_triplet: ${patch_file}"
+fi
+readonly version_triplet="${version_triplet}"
+info "version_triplet: ${version_triplet}"
+
+readonly linux_tarxz_uri="https://www.kernel.org/pub/linux/kernel/v${version%.*}.x/linux-${version_triplet}.tar.xz"
+info "linux_tarxz_uri: ${linux_tarxz_uri}"
+readonly linux_tarxz_file="$(uri_dest "${linux_tarxz_uri}")"
+info "linux_tarxz_file: ${linux_tarxz_file}"
+wget_cache_gpgv "${linux_tarxz_uri}"
+
+if false; then
+    readonly linux_tar_file="${linux_tarxz_file%.xz}"
+    info "linux_tar_file: ${linux_tar_file}"
+    unless_exists_eval "${linux_tar_file}" xz -vkd "${linux_tarxz_file}"
+fi
+
+readonly linux_dir="${PWD}/$(basename "${linux_tarxz_file%.tar.xz}")"
+info "linux_dir: ${linux_dir}"
+unless_exists_eval "${linux_dir}" tar -xf "${linux_tarxz_file}"
+
+################################################################################
+
+unless_exists_eval "${linux_dir}/.patched" patch \
+    --forward \
+    --directory "${linux_dir}" \
+    --reject-file - \
+    --strip 1 \
+    --input "${patch_file}" >&2
+
+make -C "${linux_dir}" defconfig
+
+"${linux_dir}/scripts/config" --file "${linux_dir}/.config" --disable PREEMPT_TRACER
+"${linux_dir}/scripts/config" --file "${linux_dir}/.config" --enable DEBUG_PREEMPT
+"${linux_dir}/scripts/config" --file "${linux_dir}/.config" --enable HIGH_RES_TIMERS
+"${linux_dir}/scripts/config" --file "${linux_dir}/.config" --enable HZ_1000
+"${linux_dir}/scripts/config" --file "${linux_dir}/.config" --enable PREEMPT_RT
+"${linux_dir}/scripts/config" --file "${linux_dir}/.config" --enable PREEMPT_RT_FULL
+
+make -C "${linux_dir}" deb-pkg "$@"
+
+exit "$?"
