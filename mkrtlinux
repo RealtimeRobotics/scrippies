@@ -199,14 +199,12 @@ unless_exists_eval "${linux_dir}/.patched" patch \
     --strip 1 \
     --input "${patch_file}" >&2
 
-make -C "${linux_dir}" defconfig
-
-"${linux_dir}/scripts/config" --file "${linux_dir}/.config" --disable PREEMPT_TRACER
-"${linux_dir}/scripts/config" --file "${linux_dir}/.config" --enable DEBUG_PREEMPT
 "${linux_dir}/scripts/config" --file "${linux_dir}/.config" --enable HIGH_RES_TIMERS
 "${linux_dir}/scripts/config" --file "${linux_dir}/.config" --enable HZ_1000
 "${linux_dir}/scripts/config" --file "${linux_dir}/.config" --enable PREEMPT_RT
 "${linux_dir}/scripts/config" --file "${linux_dir}/.config" --enable PREEMPT_RT_FULL
+
+make -C "${linux_dir}" olddefconfig
 
 make -C "${linux_dir}" deb-pkg "$@"
 
