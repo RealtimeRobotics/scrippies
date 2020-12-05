@@ -123,7 +123,7 @@ if [ -f "${prikey}" ]; then
     warning "extant private key: ${prikey}"
 else
     info "creating private key: ${prikey}"
-    ssh-keygen -vvv -N '' -C "${prikey}" -f "${prikey}"
+    ssh-keygen -vvv -N '' -C "$(whoami)@$(hostname):~${prikey#${HOME}}" -f "${prikey}"
 fi
 
 if ! [ -f "${pubkey}" ]; then
