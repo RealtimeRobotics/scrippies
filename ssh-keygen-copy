@@ -116,7 +116,7 @@ if [ -f "${khosts}" ]; then
     warning "extant known hosts: ${khosts}"
 else
     info "creating known hosts: ${khosts}"
-    ssh-keyscan -4 "${1#*@}" >"${khosts}"
+    ssh-keyscan "${1#*@}" >"${khosts}"
 fi
 
 if [ -f "${prikey}" ]; then
