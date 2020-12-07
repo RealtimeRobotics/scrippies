@@ -84,7 +84,11 @@ wget_cache_gpgv() (
     wget_cache "$1"
     wget_cache "$(dirname "$1")/sha256sums.asc"
     cd "$(dirname "$(uri_dest "$1")")"
-    gpg -vv --verify --trust-model=always --output=- sha256sums.asc >"sha256sums"
+    if gpg -vv --verify --trust-model=always --output=- sha256sums.asc >"sha256sums"; then
+        info "verified signature: ${PWD}/sha256sums.asc"
+    else
+        warning "unverified signature: ${PWD}/sha256sums.asc"
+    fi
     sha256sum --check --ignore-missing "sha256sums"
 )
 
