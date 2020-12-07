@@ -140,6 +140,42 @@ unless_exists_eval() {
     touch "${flag_path}"
 }
 
+# $1 : path to patch file
+infer_version_triplet() {
+    # shellcheck disable=SC2039
+    local result=""
+    if ! result="$(basename "$1" | grep -Eo '[[:digit:]]+\.[[:digit:]]+\.[[:digit:]]+')"; then
+        error "failed to infer version_triplet: $1"
+        return 1
+    fi
+    echo "${result}"
+    return 0
+}
+
+# $1 : path to patch file
+infer_package_version() {
+    # shellcheck disable=SC2039
+    local result=""
+    result="$(basename "$1")"
+    if [ "${result}" = "${result%.patch}" ]; then
+        error "missing basename suffix .patch: $1"
+        return 1
+    fi
+    result="${result%.patch}"
+    if [ "${result}" = "${result#patch-}" ]; then
+        error "missing basename prefix patch-: $1"
+        return 1
+    fi
+    result="${result#patch-}"
+    if ! echo "${result}" | grep -Eqx '[[:digit:]]+\.[[:digit:]]+\.[[:digit:]]+[-]rt[[:digit:]]+'; then
+        error "bad basename package version: $1"
+        return 1
+    fi
+    # tack on revision number because linux creates quilt package by default
+    echo "${result}-1"
+    return 0
+}
+
 ################################################################################
 
 trap cleanup EXIT
@@ -224,11 +260,18 @@ wget_cache_gpgv "${patch_xz_uri}"
 readonly patch_file="${patch_xz_file%.xz}"
 unless_exists_eval "${patch_file}" xz -vkd "${patch_xz_file}"
 
-if ! version_triplet="$(basename "${patch_file}" | grep -Eo '[[:digit:]]+\.[[:digit:]]+\.[[:digit:]]+')"; then
-    die "failed to parse version_triplet: ${patch_file}"
+# use patch file to infer package_version
+if ! package_version="$(infer_package_version "${patch_file}")"; then
+    die "FAILURE: infer_package_version ${patch_file}"
 fi
-readonly version_triplet="${version_triplet}"
+readonly package_version="${package_version}"
+info "package_version: ${package_version}"
+
+# truncate package_version at first hyphen to get version_triplet
+readonly version_triplet="${package_version%%-*}"
 info "version_triplet: ${version_triplet}"
+
+################################################################################
 
 readonly linux_tarxz_uri="https://www.kernel.org/pub/linux/kernel/v${version%.*}.x/linux-${version_triplet}.tar.xz"
 info "linux_tarxz_uri: ${linux_tarxz_uri}"
@@ -265,6 +308,7 @@ make -C "${linux_dir}" olddefconfig
 # these variables are consumed within `scripts/package/builddeb`
 make \
     KDEB_CHANGELOG_DIST="${distribution}" \
+    KDEB_PKGVERSION="${package_version}" \
     -C "${linux_dir}" deb-pkg "$@"
 
 exit "$?"
