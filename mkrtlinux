@@ -49,23 +49,30 @@ Examples:
 
     \$ $0 
 
-    \$ $0 -D bionic -V 4.16
+    \$ $0 -V 4.1 -- -j8
 
-    \$ $0 -D focal -V 5.4
+    \$ $0 -D bionic
+
+    \$ $0 -D focal -V 5.9
 
 Notes:
-
-    * VERSION must be of the form MAJOR.MINOR
-
-    * VERSION must be 3.0 or later
 
     * VERSION must be one listed here: https://www.kernel.org/pub/linux/kernel/projects/rt/
 
 EOF
 }
 
+good_link() {
+    wget -q --method=HEAD "$1"
+}
+
 vet_version() {
-    echo "$1" | grep -Exm1 '[[:digit:]]+.[[:digit:]]+'
+    if ! good_link "https://www.kernel.org/pub/linux/kernel/projects/rt/$1/"; then
+        error "broken link: https://www.kernel.org/pub/linux/kernel/projects/rt/$1/"
+        return 1
+    fi
+    echo "$1"
+    return 0
 }
 
 detect_distribution() {
@@ -89,9 +96,9 @@ infer_version() {
     # https://www.kernel.org/pub/linux/kernel/projects/rt/
     # https://en.wikipedia.org/wiki/Ubuntu_version_history#Table_of_versions
     case "$1" in
-        xenial) echo "4.4" ;;
-        bionic) echo "4.16" ;;
-        focal) echo "5.4" ;;
+        xenial) vet_version "4.4" ;;
+        bionic) vet_version "4.16" ;;
+        focal) vet_version "5.4" ;;
         *)
             error "unknown distribution: \"$1\""
             return 1
@@ -126,6 +133,23 @@ wget_cache_gpgv() (
     sha256sum --check --ignore-missing "sha256sums"
 )
 
+# $1 : patch_index_file
+parse_patch_xz_basename() {
+    # shellcheck disable=SC2039
+    local result=""
+    result="$(
+        grep -Eom1 "patch[-]${version}[.][[:digit:]]+[-]rt[[:digit:]]+([.]patch)?[.]xz" "$1" \
+            | sort -uV \
+            | head -n1
+    )"
+    if [ -z "${result}" ]; then
+        error "failed to parse patch_xz_basename: $1"
+        return 1
+    fi
+    echo "${result}"
+    return 0
+}
+
 # $1 : flag_path
 # rest : command
 unless_exists_eval() {
@@ -141,25 +165,12 @@ unless_exists_eval() {
 }
 
 # $1 : path to patch file
-infer_version_triplet() {
-    # shellcheck disable=SC2039
-    local result=""
-    if ! result="$(basename "$1" | grep -Eo '[[:digit:]]+\.[[:digit:]]+\.[[:digit:]]+')"; then
-        error "failed to infer version_triplet: $1"
-        return 1
-    fi
-    echo "${result}"
-    return 0
-}
-
-# $1 : path to patch file
 infer_package_version() {
     # shellcheck disable=SC2039
     local result=""
     result="$(basename "$1")"
     if [ "${result}" = "${result%.patch}" ]; then
-        error "missing basename suffix .patch: $1"
-        return 1
+        warning "missing basename suffix .patch: $1"
     fi
     result="${result%.patch}"
     if [ "${result}" = "${result#patch-}" ]; then
@@ -167,12 +178,28 @@ infer_package_version() {
         return 1
     fi
     result="${result#patch-}"
-    if ! echo "${result}" | grep -Eqx '[[:digit:]]+\.[[:digit:]]+\.[[:digit:]]+[-]rt[[:digit:]]+'; then
+    if ! echo "${result}" | grep -Eqx '[[:digit:]]+([.][[:digit:]]+){2,3}[-]rt[[:digit:]]+'; then
         error "bad basename package version: $1"
         return 1
     fi
     # tack on revision number because linux creates quilt package by default
     echo "${result}-1"
+    return 0
+}
+
+# $1 : linux_version
+infer_linux_index_uri() {
+    # shellcheck disable=SC2039
+    local major=""
+    major="$(echo "$1" | cut -d. -f1)"
+    if [ 2 -lt "${major}" ]; then
+        echo "https://www.kernel.org/pub/linux/kernel/v${major}.x/"
+        return 0
+    fi
+    # shellcheck disable=SC2039
+    local minor=""
+    minor="$(echo "$1" | cut -d. -f2)"
+    echo "https://www.kernel.org/pub/linux/kernel/v${major}.${minor}/"
     return 0
 }
 
@@ -240,13 +267,8 @@ info "patch_index_file: ${patch_index_file}"
 wget_cache "${patch_index_uri}"
 
 # parse the index page to discover patch for desired version
-readonly patch_xz_basename="$(
-    grep -Eo '[[:alnum:]_.-]+[.]patch[.]xz' "${patch_index_file}" \
-        | sort -uV \
-        | tail -1
-)"
-if [ -z "${patch_xz_basename}" ]; then
-    die "failed to parse patch_xz_basename: ${patch_index_file}"
+if ! patch_xz_basename="$(parse_patch_xz_basename "${patch_index_file}")"; then
+    die "FAILURE: parse_patch_xz_basename ${patch_index_file}"
 fi
 info "patch_xz_basename: ${patch_xz_basename}"
 
@@ -267,13 +289,19 @@ fi
 readonly package_version="${package_version}"
 info "package_version: ${package_version}"
 
-# truncate package_version at first hyphen to get version_triplet
-readonly version_triplet="${package_version%%-*}"
-info "version_triplet: ${version_triplet}"
+# truncate package_version at first hyphen to get linux_version
+readonly linux_version="${package_version%%-*}"
+info "linux_version: ${linux_version}"
 
 ################################################################################
 
-readonly linux_tarxz_uri="https://www.kernel.org/pub/linux/kernel/v${version%.*}.x/linux-${version_triplet}.tar.xz"
+if ! linux_index_uri="$(infer_linux_index_uri "${linux_version}")"; then
+    die "FAILURE: infer_linux_index_uri ${linux_version}"
+fi
+readonly linux_index_uri="${linux_index_uri}"
+info "linux_index_uri: ${linux_index_uri}"
+
+readonly linux_tarxz_uri="${linux_index_uri}linux-${linux_version}.tar.xz"
 info "linux_tarxz_uri: ${linux_tarxz_uri}"
 readonly linux_tarxz_file="$(uri_dest "${linux_tarxz_uri}")"
 info "linux_tarxz_file: ${linux_tarxz_file}"
@@ -298,12 +326,14 @@ unless_exists_eval "${linux_dir}/.patched" patch \
     --strip 1 \
     --input "${patch_file}" >&2
 
+make -C "${linux_dir}" defconfig
+
 "${linux_dir}/scripts/config" --file "${linux_dir}/.config" --enable HIGH_RES_TIMERS
 "${linux_dir}/scripts/config" --file "${linux_dir}/.config" --enable HZ_1000
 "${linux_dir}/scripts/config" --file "${linux_dir}/.config" --enable PREEMPT_RT
 "${linux_dir}/scripts/config" --file "${linux_dir}/.config" --enable PREEMPT_RT_FULL
 
-make -C "${linux_dir}" olddefconfig
+yes "" | make -C "${linux_dir}" oldconfig
 
 # these variables are consumed within `scripts/package/builddeb`
 make \
