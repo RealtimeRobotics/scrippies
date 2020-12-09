@@ -47,13 +47,20 @@ Examples:
 EOF
 }
 
-# $1 : have_list
+grep_version() {
+    grep -Ex '[[:digit:]]+[.][[:digit:]]+[.][[:digit:]]+[-][[:digit:]]+'
+}
+
+get_version_current() {
+    uname -r | cut -d- -f1,2 | grep_version
+}
+
 get_version_latest() {
     find /boot -maxdepth 1 -type f -name 'vmlinuz-*' \
         | sort -V \
-        | cut -d- -f2- \
         | tail -1 \
-        | grep -Exo '[[:alnum:].-]+'
+        | cut -d- -f2,3 \
+        | grep_version
 }
 
 # $1 : title
@@ -99,25 +106,26 @@ shift "$((OPTIND - 1))"
 
 ################################################################################
 
-# construct have_list
-readonly have_list="$(mktemp -t have_list.XXXXXX)"
-(
-    find /boot -maxdepth 1 -type f ! -name 'memtest*'
-    find /usr/src -maxdepth 1 -mindepth 1 -type d -name 'linux-*'
-) >"${have_list}"
-sort -Vuo "${have_list}" "${have_list}"
-info_file 'have these' "${have_list}"
-
-if ! version_current="$(uname -r)"; then
-    die "FAILURE: uname -r"
+if ! version_current="$(get_version_current)"; then
+    die "FAILURE: get_version_current"
 fi
 readonly version_current="${version_current}"
 info "version_current: ${version_current}"
+
 if ! version_latest="$(get_version_latest)"; then
     die "FAILURE: get_version_latest"
 fi
 readonly version_latest="${version_latest}"
 info "version_latest: ${version_latest}"
+
+# construct have_list
+readonly have_list="$(mktemp -t have_list.XXXXXX)"
+(
+    find /boot -maxdepth 1 -type f ! -name 'memtest*'
+    find /usr/src -maxdepth 1 -type d -name 'linux-*'
+) >"${have_list}"
+sort -Vuo "${have_list}" "${have_list}"
+info_file 'have these' "${have_list}"
 
 # construct keep_list
 readonly keep_list="$(mktemp -t keep_list.XXXXXX)"
