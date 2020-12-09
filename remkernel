@@ -4,16 +4,15 @@
 
 # Remove unused kernels between the currently-running and the latest.
 
-set -euvx
+set -eu
 
 readonly this="$(readlink -f "$0")"
-readonly here="$(dirname "${this}")"
-readonly whatami="$(basename "${here}").$(basename "${this}")"
+readonly whatami="$(basename "${this}")"
 readonly tmpdir="$(mktemp -dt "${whatami}.XXXXXX")"
 
-info() { logger -s -t "${whatami}[$$]" -p user.info "INFO:    $@"; }
-warning() { logger -s -t "${whatami}[$$]" -p user.warning "WARNING: $@"; }
-error() { logger -s -t "${whatami}[$$]" -p user.error "ERROR:   $@"; }
+info() { logger -s -t "${whatami}[$$]" -p user.info "INFO: $*"; }
+warning() { logger -s -t "${whatami}[$$]" -p user.warning "WARNING: $*"; }
+error() { logger -s -t "${whatami}[$$]" -p user.error "ERROR: $*"; }
 
 die() {
     error "$@"
@@ -26,59 +25,125 @@ cleanup() {
     return "${status}"
 }
 
-is_sudo() {
-    true \
-        && [ "${USER:-}" = "root" ] \
-        && [ "${SUDO_USER:-}" != "root" ] \
-        && [ "" ]
+usage() {
+    cat <<EOF
+
+Usage: $0 [OPTION]...
+Remove extra linux images and associated bagatelle.
+
+Options:
+
+    -h    print usage and exit
+    -n    noop; stop before actually doing anything
+
+Examples:
+
+    \$ $0 -h
+
+    \$ $0
+
+    \$ $0 -n
+
+EOF
 }
 
-########################
-# #################### #
-# # REAL WORK BEGINS # #
-# #################### #
-########################
+# $1 : have_list
+get_version_latest() {
+    find /boot -maxdepth 1 -type f -name 'vmlinuz-*' \
+        | sort -V \
+        | cut -d- -f2- \
+        | tail -1 \
+        | grep -Exo '[[:alnum:].-]+'
+}
+
+# $1 : title
+# $2 : path
+info_file() {
+    if [ -s "$2" ]; then
+        info "$1:"
+        while read -r line; do
+            info "    ${line}"
+        done <"$2"
+    else
+        info "$1: [EMPTY]"
+    fi
+}
+
+info_eval() {
+    if [ "true" = "${requested_noop:-false}" ]; then
+        info "noop skipping: $*"
+    else
+        info "executing: $*"
+        eval "$@"
+    fi
+}
+
+################################################################################
 
 trap cleanup EXIT
 export TMPDIR="${tmpdir}"
 export LC_ALL=C
 
-readonly version_current="$(uname -r)"
-readonly version_latest="$(find /boot -maxdepth 1 -type f -name 'vmlinuz-*' | sort -V | tail -1 | cut -d- -f2-)"
+while getopts ":hn" opt; do
+    case "${opt}" in
+        h)
+            usage
+            exit 0
+            ;;
+        n) readonly requested_noop="true" ;;
+        :) die "missing argument: -${OPTARG}" ;;
+        \?) die "bad option: -${OPTARG}" ;;
+    esac
+done
+shift "$((OPTIND - 1))"
 
-readonly boot_list="$(mktemp -t boot.list.XXXXXX)"
-readonly keep_list="$(mktemp -t keep.list.XXXXXX)"
-readonly stem_list="$(mktemp -t stem.list.XXXXXX)"
-readonly mybe_list="$(mktemp -t mybe.list.XXXXXX)"
-readonly kill_list="$(mktemp -t kill.list.XXXXXX)"
+################################################################################
 
-# construct list of all /boot/ files and "keep" list
-find /boot -maxdepth 1 -type f >"${boot_list}"
-grep -E "(${version_current}|${version_latest})" <"${boot_list}" >"${keep_list}"
-sort -uo "${keep_list}" "${keep_list}"
+# construct have_list
+readonly have_list="$(mktemp -t have_list.XXXXXX)"
+(
+    find /boot -maxdepth 1 -type f ! -name 'memtest*'
+    find /usr/src -maxdepth 1 -mindepth 1 -type d -name 'linux-*'
+) >"${have_list}"
+sort -Vuo "${have_list}" "${have_list}"
+info_file 'have these' "${have_list}"
 
-# construct list of filename stems from the "keep" list
-xargs -I{} basename {} <"${keep_list}" | cut -d- -f1 | sort -u >"${stem_list}"
-
-# construct list of "maybe" files that have interesting stems
-grep -Ff "${stem_list}" <"${boot_list}" >"${mybe_list}"
-sort -uo "${mybe_list}" "${mybe_list}"
-
-# "maybe" files that are not "keep" files become "kill" files
-comm -23 "${mybe_list}" "${keep_list}" >"${kill_list}"
-
-if ! [ -s "${kill_list}" ]; then
-    warning "nothing to remove"
+if ! version_current="$(uname -r)"; then
+    die "FAILURE: uname -r"
 fi
+readonly version_current="${version_current}"
+info "version_current: ${version_current}"
+if ! version_latest="$(get_version_latest)"; then
+    die "FAILURE: get_version_latest"
+fi
+readonly version_latest="${version_latest}"
+info "version_latest: ${version_latest}"
 
-# find the packages that provide the "kill" files; add them to the purge list
-readonly purge_list="$(mktemp -t purge.list.XXXXXX)"
-xargs -r dpkg -S <"${kill_list}" | cut -d: -f1 | sort -u >"${purge_list}"
+# construct keep_list
+readonly keep_list="$(mktemp -t keep_list.XXXXXX)"
+grep -E "(${version_current}|${version_latest})" <"${have_list}" >"${keep_list}"
+sort -Vuo "${keep_list}" "${keep_list}"
+info_file 'keep these' "${keep_list}"
+
+# construct kill_list
+readonly kill_list="$(mktemp -t kill_list.XXXXXX)"
+comm -23 "${have_list}" "${keep_list}" >"${kill_list}"
+info_file 'kill these' "${kill_list}"
+
+# construct purge list
+readonly purge_list="$(mktemp -t purge_list.XXXXXX)"
+xargs -r dpkg -S <"${kill_list}" \
+    | cut -d: -f1 \
+    | tr -s ',[:space:]' '\n' \
+    | sort -u >"${purge_list}"
+info_file 'purge these' "${purge_list}"
 
 # purge the packages in the purge list
-dpkg --configure -a
-apt-get -y update
-xargs -r apt-get -yf purge <"${purge_list}"
-apt-get -y autoremove
-apt-get -y autoclean
-apt-get install -fy
+info_eval dpkg --configure -a
+info_eval apt-get -y update
+info_eval apt-get -yf purge "$(xargs -r <"${purge_list}")"
+info_eval apt-get -y autoremove
+info_eval apt-get -y autoclean
+info_eval apt-get install -fy
+
+exit "$?"
