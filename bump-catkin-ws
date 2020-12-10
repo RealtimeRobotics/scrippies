@@ -53,6 +53,19 @@ Examples:
 EOF
 }
 
+# $1 : title
+# $2 : path
+error_file() {
+    if [ -s "$2" ]; then
+        error "$1:"
+        while read -r line; do
+            error "    ${line}"
+        done <"$2"
+    else
+        error "$1: [EMPTY]"
+    fi
+}
+
 is_good_triplet() {
     echo "$@" | grep -Eq '^[[:digit:]]+\.[[:digit:]]+\.[[:digit:]]+$'
 }
@@ -84,7 +97,7 @@ while [ 0 -lt "$#" ]; do
             shift
             ;;
         -n | --dry-run)
-            readonly dry_run="true"
+            readonly requested_dry_run="true"
             ;;
         --major)
             readonly bump="major"
@@ -122,27 +135,84 @@ else
     warning "defaulting bump: ${bump}"
 fi
 
-# assumes a bloomable catkin workspace; i.e., every `package.xml` has a
-# `<version>...</version>` tag and every version value is identical across all
-# `package.xml` files.
+################################################################################
+
+cd "${catkin_ws}"
+
+################################################################################
+
+# find all CMakeLists.txt files
+readonly cmakelists_txt_list="$(mktemp -t cmakelists_txt_list.XXXXXX)"
+git ls-files | grep -E '^([^/]*/)*CMakeLists[.]txt$' >"${cmakelists_txt_list}"
+sort -uo "${cmakelists_txt_list}" "${cmakelists_txt_list}"
+
+# find all package.xml files
 readonly package_xml_list="$(mktemp -t package_xml_list.XXXXXX)"
-git -C "${catkin_ws}" ls-files | grep -E '^([^/]*/)*package[.]xml$' >"${package_xml_list}"
+git ls-files | grep -E '^([^/]*/)*package[.]xml$' >"${package_xml_list}"
 sort -uo "${package_xml_list}" "${package_xml_list}"
 
+# find all CMakeLists.txt dirs
+readonly cmakelists_txt_dir_list="$(mktemp -t cmakelists_txt_dir_list.XXXXXX)"
+xargs dirname <"${cmakelists_txt_list}" >"${cmakelists_txt_dir_list}"
+sort -uo "${cmakelists_txt_dir_list}" "${cmakelists_txt_dir_list}"
+
+# find all package.xml dirs
+readonly package_xml_dir_list="$(mktemp -t package_xml_dir_list.XXXXXX)"
+xargs dirname <"${package_xml_list}" >"${package_xml_dir_list}"
+sort -uo "${package_xml_dir_list}" "${package_xml_dir_list}"
+
+# find all project dirs (have both CMakeLists.txt and package.xml)
+readonly project_dir_list="$(mktemp -t project_dir_list.XXXXXX)"
+comm -12 "${package_xml_dir_list}" "${cmakelists_txt_dir_list}" >"${project_dir_list}"
+sort -uo "${project_dir_list}" "${project_dir_list}"
+if ! [ -s "${project_dir_list}" ]; then
+    die "failed to discover any valid project dirs"
+fi
+
+comm -13 "${package_xml_dir_list}" "${cmakelists_txt_dir_list}" | while read -r dur; do
+    warning "missing package.xml: ${dur}"
+done
+comm -23 "${package_xml_dir_list}" "${cmakelists_txt_dir_list}" | while read -r dur; do
+    warning "missing CMakeLists.txt: ${dur}"
+done
+
+# generate list of good package.xml
+sed 's,$,/package.xml,g' <"${project_dir_list}" >"${package_xml_list}"
+
+readonly duples="$(mktemp -t duples.XXXXXX)"
+while read -r package_xml; do
+    triplet="$(
+        sed -nr 's|.*<version>([[:digit:]]+\.[[:digit:]]+\.[[:digit:]]+)</version>.*|\1|gp' \
+            "${package_xml}"
+    )"
+    if [ -z "${triplet}" ]; then
+        die "missing version triplet: ${package_xml}"
+    fi
+    printf '%s\t%s\n' "${triplet}" "${package_xml}"
+done <"${package_xml_list}" >"${duples}"
+sort -Vuo "${duples}" "${duples}"
+
 readonly triplet_list="$(mktemp -t triplet_list.XXXXXX)"
-xargs sed -nr \
-    's|.*<version>([[:digit:]]+\.[[:digit:]]+\.[[:digit:]]+)</version>.*|\1|gp' \
-    <"${package_xml_list}" >"${triplet_list}"
-sort -uo "${triplet_list}" "${triplet_list}"
+cut -f1 <"${duples}" >"${triplet_list}"
+sort -Vuo "${triplet_list}" "${triplet_list}"
+
+if ! [ -s "${triplet_list}" ]; then
+    die "failed to parse any version triplets"
+fi
 
 if ! [ 1 -eq "$(wc -l <"${triplet_list}")" ]; then
-    die "bad triplet_list: $(paste -sd, <"${triplet_list}")"
+    error "too many version triplets: $(paste -sd, <"${triplet_list}")"
+    error_file 'versions in package.xml files' "${duples}"
+    exit 1
 fi
+
+################################################################################
 
 readonly old_triplet="$(xargs <"${triplet_list}")"
 if ! is_good_triplet "${old_triplet}"; then
     die "bad old_triplet: ${old_triplet}"
 fi
+info "old_triplet: ${old_triplet}"
 
 readonly old_major="$(echo "${old_triplet}" | cut -d. -f1)"
 readonly old_minor="$(echo "${old_triplet}" | cut -d. -f2)"
@@ -169,38 +239,47 @@ case "${bump}" in
         ;;
 esac
 
+readonly new_triplet="${new_major}.${new_minor}.${new_patch}"
+info "new_triplet: ${new_triplet}"
+
 # assumes we want to replace every instance of the old_triplet with the
 # new_triplet; this is pretty aggressive and may collide with version strings
 # that we _don't_ want to change
 readonly sed_expr="s|${old_major}\.${old_minor}\.${old_patch}|${new_major}\.${new_minor}\.${new_patch}|g"
-if [ "true" = "${dry_run:-false}" ]; then
+if [ "true" = "${requested_dry_run:-false}" ]; then
+    info "DRY run: modifying package.xml files"
     xargs sed -r -e "${sed_expr}" <"${package_xml_list}" >/dev/null
 else
+    info "WET run: modifying package.xml files"
     xargs sed -i -r -e "${sed_expr}" <"${package_xml_list}"
 fi
 
 if ! [ "true" = "${git_commit:-false}" ]; then
+    info "stopping here because no --git-commit"
     exit "$?"
 fi
 
-readonly new_triplet="${new_major}.${new_minor}.${new_patch}"
 GIT_AUTHOR_DATE="$(date -uIseconds)"
 export GIT_AUTHOR_DATE
 export GIT_COMMITTER_DATE="${GIT_AUTHOR_DATE}"
-if [ "true" = "${dry_run:-false}" ]; then
+if [ "true" = "${requested_dry_run:-false}" ]; then
+    info "DRY run: git commit"
     git -C "${catkin_ws}" commit --all --message="bump version ${new_triplet}" --dry-run || true
 else
+    info "WET run: git commit"
     git -C "${catkin_ws}" commit --all --message="bump version ${new_triplet}"
 fi
 
 if ! [ "true" = "${git_tag:-false}" ]; then
+    info "stopping here because no --git-tag"
     exit "$?"
 fi
 
 readonly cmd_git_tag="git -C \"${catkin_ws}\" tag --sign --message=\"tag version ${new_triplet}\" \"${new_triplet}\" HEAD"
-if [ "true" = "${dry_run:-false}" ]; then
-    info "dry-run: ${cmd_git_tag}"
+if [ "true" = "${requested_dry_run:-false}" ]; then
+    info "DRY run: ${cmd_git_tag}"
 else
+    info "WET run: ${cmd_git_tag}"
     eval "${cmd_git_tag}"
 fi
 
