@@ -97,7 +97,6 @@ if ! [ -s "${sm_path_list}" ]; then
 fi
 
 readonly sm_path_begin_end_list="$(mktemp -t sm_path_begin_end_list.XXXXXX)"
-
 while read -r sm_path; do
     sm_diff="$(mktemp -t "$(filenamify "${sm_path}").diff.XXXXXX")"
     git -C "${workdir}" diff -- "${sm_path}" >"${sm_diff}"
@@ -105,22 +104,20 @@ while read -r sm_path; do
         die "dirty submodule: ${sm_path}"
     fi
     sed -nri 's|^[-+]Subproject commit ([[:xdigit:]]{40})$|\1|gp' "${sm_diff}"
-
     if ! [ -s "${sm_diff}" ]; then
+        warning "no diff: ${sm_path}"
         continue
     fi
-
     if ! [ 2 -eq "$(wc -l <"${sm_diff}")" ]; then
         die "$(wc "${sm_diff}")"
     fi
+    printf '%s\t%s\t%s\n' \
+        "${sm_path}" "$(head -1 "${sm_diff}")" "$(tail -1 "${sm_diff}")"
+done <"${sm_path_list}" >"${sm_path_begin_end_list}"
 
-    printf \
-        '%s\t%s\t%s\n' \
-        "${sm_path}" \
-        "$(head -1 "${sm_diff}")" \
-        "$(tail -1 "${sm_diff}")" \
-        >>"${sm_path_begin_end_list}"
-done <"${sm_path_list}"
+if ! [ -s "${sm_path_begin_end_list}" ]; then
+    die "no diffs"
+fi
 
 printf 'submodule update: '
 xargs -L1 printf '%s(%.7s->%.7s)\n' <"${sm_path_begin_end_list}" | paste -sd,
@@ -128,3 +125,5 @@ while read -r sm_path begin end; do
     printf '\n%s (%s -> %s)\n' "${sm_path}" "${begin}" "${end}"
     git --no-pager -C "${workdir}/${sm_path}" log --oneline --stat=80 "${begin}"..."${end}"
 done <"${sm_path_begin_end_list}"
+
+exit "$?"
