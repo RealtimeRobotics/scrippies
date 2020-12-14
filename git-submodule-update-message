@@ -5,14 +5,13 @@
 set -eu
 
 readonly this="$(readlink -f "$0")"
-readonly here="$(dirname "${this}")"
 readonly whatami="$(basename "${this}")"
 readonly tmpdir="$(mktemp -dt "${whatami}.XXXXXX")"
 
-log() { echo "${whatami}[$$]: $@" >&2; }
-error() { log "ERROR: $@"; }
-warning() { log "WARNING: $@"; }
-info() { log "INFO: $@"; }
+log() { echo "${whatami}[$$]: $*" >&2; }
+error() { log "ERROR: $*"; }
+warning() { log "WARNING: $*"; }
+info() { log "INFO: $*"; }
 
 die() {
     error "$@"
@@ -28,6 +27,7 @@ cleanup() {
 
 usage() {
     cat <<EOF
+
 Usage: $0 [OPTION]...
 Print summary of git submodule changes.
 
@@ -47,7 +47,7 @@ EOF
 # 3.282 Portable Filename Character Set
 # https://pubs.opengroup.org/onlinepubs/9699919799/basedefs/V1_chap03.html#tag_03_282
 filenamify() {
-    printf "$@" | tr -sc '[:alnum:]._-' '_'
+    printf '%s' "$*" | tr -sc '[:alnum:]_.-' '_'
 }
 
 ################################################################################
@@ -56,7 +56,7 @@ trap cleanup EXIT
 export TMPDIR="${tmpdir}"
 export LC_ALL=C
 
-while getopts ":hC:o:" opt; do
+while getopts ":hC:" opt; do
     case "${opt}" in
         h)
             usage
@@ -75,10 +75,10 @@ while getopts ":hC:o:" opt; do
         \?) die "Invalid option: -${OPTARG}" ;;
     esac
 done
-shift "$((${OPTIND} - 1))"
+shift "$((OPTIND - 1))"
 
 # workdir
-if ! [ -n "${workdir:-}" ]; then
+if [ -z "${workdir:-}" ]; then
     readonly workdir="${PWD}"
     warning "defaulting workdir: ${workdir}"
 fi
@@ -87,6 +87,7 @@ if ! git -C "${workdir}" rev-parse HEAD >/dev/null 2>&1; then
 fi
 
 readonly sm_path_list="$(mktemp -t sm_path_list.XXXXXX)"
+# shellcheck disable=SC2016
 git -C "${workdir}" submodule --quiet foreach 'echo ${sm_path}' >"${sm_path_list}"
 sort -uo "${sm_path_list}" "${sm_path_list}"
 
@@ -97,7 +98,7 @@ fi
 
 readonly sm_path_begin_end_list="$(mktemp -t sm_path_begin_end_list.XXXXXX)"
 
-while read sm_path; do
+while read -r sm_path; do
     sm_diff="$(mktemp -t "$(filenamify "${sm_path}").diff.XXXXXX")"
     git -C "${workdir}" diff -- "${sm_path}" >"${sm_diff}"
     if grep -Eq '^[+]Subproject commit [[:xdigit:]]{40}[-]dirty$' <"${sm_diff}"; then
@@ -113,12 +114,17 @@ while read sm_path; do
         die "$(wc "${sm_diff}")"
     fi
 
-    printf "${sm_path}\t$(head -1 "${sm_diff}")\t$(tail -1 "${sm_diff}")\n" \
-           >>"${sm_path_begin_end_list}"
+    printf \
+        '%s\t%s\t%s\n' \
+        "${sm_path}" \
+        "$(head -1 "${sm_diff}")" \
+        "$(tail -1 "${sm_diff}")" \
+        >>"${sm_path_begin_end_list}"
 done <"${sm_path_list}"
 
-echo "submodule update: $(xargs printf '%s (%.7s -> %.7s)\n' <"${sm_path_begin_end_list}" | paste -sd,)"
-while read sm_path begin end; do
-    printf "\n${sm_path} (${begin} -> ${end}):\n"
+printf 'submodule update: '
+xargs -L1 printf '%s(%.7s->%.7s)\n' <"${sm_path_begin_end_list}" | paste -sd,
+while read -r sm_path begin end; do
+    printf '\n%s (%s -> %s)\n' "${sm_path}" "${begin}" "${end}"
     git --no-pager -C "${workdir}/${sm_path}" log --oneline --stat=80 "${begin}"..."${end}"
 done <"${sm_path_begin_end_list}"
