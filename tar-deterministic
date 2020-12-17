@@ -5,14 +5,13 @@
 set -eu
 
 readonly this="$(readlink -f "$0")"
-readonly here="$(dirname "${this}")"
 readonly whatami="$(basename "${this}")"
 readonly tmpdir="$(mktemp -dt "${whatami}.XXXXXX")"
 
-log() { echo "${whatami}[$$]: $@" >&2; }
-error() { log "ERROR: $@"; }
-warning() { log "WARNING: $@"; }
-info() { log "INFO: $@"; }
+log() { echo "${whatami}[$$]: $*" >&2; }
+error() { log "ERROR: $*"; }
+warning() { log "WARNING: $*"; }
+info() { log "INFO: $*"; }
 
 die() {
     error "$@"
@@ -28,24 +27,26 @@ cleanup() {
 
 usage() {
     cat <<EOF
-Usage: $(basename ${this}) [OPTION]...
-Create a deterministic tarball from the contents of working directory.
+
+Usage: $0 [OPTION]...
+Create a deterministic tarball from working directory contents.
 
 Options:
+
     -h            print this usage and return success
     -C WORKDIR    run as if started in WORKDIR (default: \$PWD)
-    -m MTIME      override mtime (default: "now")
+    -m MTIME      override mtime (default: latest discovered)
     -o OUTFILE    write to OUTFILE (default: \$WORKDIR.tar)
 
 Examples:
 
-    \$ $(basename ${this})
+    \$ $0
 
-    \$ $(basename ${this}) -C foo/bar
+    \$ $0 -C foo/bar
 
-    \$ $(basename ${this}) -C foo/bar -m "2019-06-05 18:03:36"
+    \$ $0 -C foo/bar -o foobar_0123.tar
 
-    \$ $(basename ${this}) -C foo/bar -m "2019-06-05 18:03:36" -o foobar_0123.tar
+    \$ $0 -C foo/bar -o foobar_0123.tar -m "2019-06-05 18:03:36"
 
 Notes:
 
@@ -59,13 +60,14 @@ EOF
 }
 
 vet_workdir() {
+    # shellcheck disable=SC2039
     local result=""
     if ! result="$(readlink -f "$1")"; then
         error "bad path: $1"
         return 1
     fi
     if ! [ -d "${result}" ]; then
-        error "missing directory: ${result}"
+        error "not a directory: ${result}"
         return 1
     fi
     echo "${result}"
@@ -73,24 +75,21 @@ vet_workdir() {
 }
 
 vet_outfile() {
+    # shellcheck disable=SC2039
     local result=""
     if ! result="$(readlink -f "$1")"; then
         error "bad path: $1"
         return 1
     fi
     if [ -f "${result}" ]; then
-        if ! [ "true" = "${requested_force:-false}" ]; then
-            error "exists: ${result}"
-            return 1
-        fi
-        warning "extant file: ${result}"
-        warning "$(rm -v "${result}")"
+        warning "will overwrite: ${result}"
     fi
     echo "${result}"
     return 0
 }
 
 vet_mtime() {
+    # shellcheck disable=SC2039
     local result=""
     if ! result="@$(date -d "$1" +%s)"; then
         error "bad mtime: $1"
@@ -100,71 +99,88 @@ vet_mtime() {
     return 0
 }
 
+# $1 : dir
+get_default_mtime() (
+    cd "$1"
+    find . \
+        \( \
+        ! -type d \
+        -o \
+        \( -links 2 -exec sh -c '
+            is_empty() (
+                cd "$1"
+                set -- .[!.]* ; test -f "$1" && return 1
+                set -- ..?* ; test -f "$1" && return 1
+                set -- * ; test -f "$1" && return 1
+                return 0
+            )
+            is_empty "$0"' {} \; \
+        \) \
+        \) -exec stat -c'@%Y' {} \; \
+        | LC_ALL=C sort -n \
+        | tail -1 \
+        | grep -Eox '@[[:digit:]]+'
+)
+
 ################################################################################
 
 trap cleanup EXIT
 export TMPDIR="${tmpdir}"
 export LC_ALL=C
 
-while getopts ":hfC:o:m:" opt; do
+while getopts ":hC:m:o:" opt; do
     case "${opt}" in
         h)
             usage
             exit "$?"
             ;;
-        f) requested_force="true" ;;
         C) workdir="${OPTARG}" ;;
-        o) outfile="${OPTARG}" ;;
         m) mtime="${OPTARG}" ;;
+        o) outfile="${OPTARG}" ;;
         :) die "Missing argument: -${OPTARG}" ;;
         \?) die "Invalid option: -${OPTARG}" ;;
     esac
 done
-shift "$((${OPTIND} - 1))"
+shift "$((OPTIND - 1))"
 
 # workdir
-if ! [ -n "${workdir:-}" ]; then
+if [ -z "${workdir:-}" ]; then
     workdir="${PWD}"
     warning "defaulted workdir: ${workdir}"
 fi
 if ! workdir="$(vet_workdir "${workdir}")"; then
     die "FAILURE: vet_workdir ${workdir}"
 fi
+readonly workdir="${workdir}"
 info "workdir: ${workdir}"
 
+# mtime
+if [ -z "${mtime:-}" ]; then
+    if ! mtime="$(get_default_mtime "${workdir}")"; then
+        die "FAILURE: get_default_mtime ${workdir}"
+    fi
+    warning "discovered mtime: ${mtime}"
+fi
+if ! mtime="$(vet_mtime "${mtime}")"; then
+    die "FAILURE: vet_mtime ${mtime}"
+fi
+readonly mtime="${mtime}"
+info "mtime: ${mtime} ($(date -uIs -d "${mtime}"))"
+
 # outfile
-if ! [ -n "${outfile:-}" ]; then
+if [ -z "${outfile:-}" ]; then
     outfile="${workdir}.tar"
     warning "defaulted outfile: ${outfile}"
 fi
 if ! outfile="$(vet_outfile "${outfile}")"; then
     die "FAILURE: vet_outfile ${outfile}"
 fi
+readonly outfile="${outfile}"
 info "outfile: ${outfile}"
-
-# mtime
-if ! [ -n "${mtime:-}" ]; then
-    mtime="now"
-    warning "defaulted mtime: ${mtime}"
-fi
-if ! mtime="$(vet_mtime "${mtime}")"; then
-    die "FAILURE: vet_mtime ${mtime}"
-fi
-info "mtime: ${mtime} ($(date -uIs -d "${mtime}"))"
 
 # ###############################################
 # Explanation for a horrible little shell snippet
 # ###############################################
-#
-# `sed 's/./\\&/g'`
-#
-# This is some shell trickery to deal with whitespace-containing filenames. The
-# original belongs to Rich Felker, and it was good enough for me to steal when
-# Makeself needed such a patch.
-#
-# * http://www.etalabs.net/sh_tricks.html
-# * https://github.com/megastep/makeself/pull/153
-#
 #
 # `--pax-option "exthdr.name=%d/PaxHeaders.0/%f"`
 #
@@ -178,41 +194,55 @@ info "mtime: ${mtime} ($(date -uIs -d "${mtime}"))"
 #
 # `--pax-option="delete=atime"`
 # `--pax-option="delete=ctime"`
-# `--pax-option="delete=mtime"`
-# `--mtime=0`
 #
 # This is some sillyness to force both GNU tar v1.28 (xenial) and v1.29
 # (bionic) to deterministically create identical archives; i.e., any two with
 # identical content will have identical checksums. This turns out to be Really
 # Difficult.
 #
-# Here, with the `--pax-option=delete=atime,delete=ctime,delete=mtime` options,
-# I'm asking `tar` to keep timestamps out of the archive. For reasons that
-# escape me, this is necessary to stop GNU tar v1.29 from writing the Pax
+# Here, with the `--pax-option=delete=atime,delete=ctime` options, I'm asking
+# `tar` to keep the access and change timestamps out of the archive. Based on
+# my testing, --pax-option=delete=mtime has no effect. For reasons that escape
+# me, this is necessary to stop GNU tar v1.29 from writing the Pax
 # Header. Conversely, GNU tar v1.28 seems happy to omit the Pax Header under
 # all the conditions I tested.
 #
-# Note that I'm _also_ specifying `--mtime` which causes the given Unix
-# Timestamp to be written into the archive as the modification time for all
-# members. A sane person would expect `--mtime=...` and
-# `--pax-option="delete=mtime"` to mutually conflict, so that should inform
-# your opinion of the GNU tar developers.
+#
+# `--mtime="${mtime}"`
+#
+# Set the modification time for all members to the given value
 #
 # * https://www.gnu.org/software/tar/manual/tar.html#SEC147
+truncate -s0 "${outfile}"
 (
     cd "${workdir}"
-    find . ! -type d \
-        | sort \
+    find . \
+        \( \
+        ! -type d \
+        -o \
+        \( -links 2 -exec sh -c '
+            is_empty () (
+                cd "$1"
+                set -- .[!.]* ; test -f "$1" && return 1
+                set -- ..?* ; test -f "$1" && return 1
+                set -- * ; test -f "$1" && return 1
+                return 0
+            )
+            is_empty "$0"' {} \; \
+        \) \
+        \) -print \
+        | LC_ALL=C sort \
         | sed 's/./\\&/g' \
         | xargs tar \
+            --format=pax \
+            --group=0 \
+            --mtime="${mtime}" \
             --numeric-owner \
             --owner=0 \
-            --group=0 \
-            --format=pax \
-            --pax-option="exthdr.name=%d/PaxHeaders.0/%f" \
             --pax-option="delete=atime" \
             --pax-option="delete=ctime" \
-            --pax-option="delete=mtime" \
-            --mtime="${mtime}" \
+            --pax-option="exthdr.name=%d/PaxHeaders.0/%f" \
             -rf "${outfile}"
 )
+
+exit "$?"
