@@ -67,7 +67,8 @@ while getopts ":h" opt; do
 done
 shift "$((OPTIND - 1))"
 
-catkin "$@" \
+set -- \
+    "$@" \
     --no-color \
     --no-notify \
     --no-status \
@@ -85,5 +86,22 @@ catkin "$@" \
     --make-args \
     "${MAKEFLAGS:- --jobs=$(((1 + $(nproc)) / 2)) --load-average=$(nproc)}" \
     --
+    
+# Run catkin in a subshell piped to sed because (1.) we protect the terminal
+# from catkin and (2.) we can nuke all of the ANSI escape codes. Because the
+# subshell can't modifiy variables in its parent, we have to write the catkin
+# exit status into a temporary file and read it after exiting the subshell.
+return_code="$(mktemp -t return_code.XXXXXX)"
+if catkin "$@"; then
+    echo "$?" >"${return_code}"
+else
+    echo "$?" >"${return_code}"
+fi | sed 's/\x1b\[.\{0,5\}[JKmsu]//g'
 
-exit "$?"
+exit "$(xargs <"${return_code}")"
+
+# References:
+#
+# * https://en.wikipedia.org/wiki/ANSI_escape_code
+# * https://unix.stackexchange.com/a/14699
+# * https://unix.stackexchange.com/a/55547
