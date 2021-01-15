@@ -128,40 +128,21 @@ case "${verb}" in
     *) ;;
 esac
 
-colcon "${verb}" "$@"
+# Run colcon in a subshell piped to sed because (1.) we protect the terminal
+# from colcon and (2.) we can nuke all of the ANSI escape codes. Because the
+# subshell can't modifiy variables in its parent, we have to write the colcon
+# exit status into a temporary file and read it after exiting the subshell.
+return_code="$(mktemp -t return_code.XXXXXX)"
+if colcon "${verb}" "$@"; then
+    echo "$?" >"${return_code}"
+else
+    echo "$?" >"${return_code}"
+fi | sed 's/\x1b\[.\{0,5\}[JKmsu]//g'
 
-exit "$?"
+exit "$(xargs <"${return_code}")"
 
-# ALL colcon --event-handlers:
+# References:
 #
-# compile_commands
-# console_cohesion
-# console_direct
-# console_package_list
-# console_start_end
-# console_stderr
-# desktop_notification
-# event_log
-# log
-# log_command
-# status
-# store_result
-# summary
-# terminal_title
-
-# DEFAULT colcon --event-handlers:
-#
-# compile_commands+
-# console_cohesion-
-# console_direct-
-# console_package_list-
-# console_start_end+
-# console_stderr+
-# desktop_notification+
-# event_log+
-# log+
-# log_command+
-# status-
-# store_result+
-# summary+
-# terminal_title-
+# * https://en.wikipedia.org/wiki/ANSI_escape_code
+# * https://unix.stackexchange.com/a/14699
+# * https://unix.stackexchange.com/a/55547
