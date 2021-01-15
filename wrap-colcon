@@ -1,0 +1,170 @@
+#!/bin/sh
+
+# scrippies/wrap-colcon
+
+set -euvx
+
+this="$(readlink -f "$0")"
+readonly this="${this}"
+whatami="$(basename "${this}")"
+readonly whatami="${whatami}"
+tmpdir="$(mktemp -dt "${whatami}.XXXXXX")"
+readonly tmpdir="${tmpdir}"
+
+log() { echo "${whatami}[$$]: $*" >&2; }
+error() { log "ERROR: $*"; }
+warning() { log "WARNING: $*"; }
+info() { log "INFO: $*"; }
+
+die() {
+    error "$*"
+    usage >&2
+    exit 1
+}
+
+cleanup() {
+    status="$?"
+    rm -rf "${tmpdir}"
+    return "${status}"
+}
+
+usage() {
+    cat <<EOF
+
+Usage: $0 COLCON_VERB [[--] [COLCON_ARG]... [COLCON_OPT]...]
+Wrap an invocation to colcon with some helpful options.
+
+Examples:
+
+    \$ $0
+
+    \$ $0 build
+
+    \$ $0 test --packages-select-by-dep rtr_utils
+
+    \$ $0 test-result
+
+EOF
+}
+
+################################################################################
+
+trap cleanup EXIT
+export TMPDIR="${tmpdir}"
+export LC_ALL=C
+
+while getopts ":h" opt; do
+    case "${opt}" in
+        h)
+            usage
+            exit 0
+            ;;
+        :) die "missing argument: -${OPTARG}" ;;
+        \?) die "bad option: -${OPTARG}" ;;
+    esac
+done
+shift "$((OPTIND - 1))"
+
+if ! [ 0 -lt "$#" ]; then
+    die "bad args"
+fi
+
+readonly verb="$1"
+shift
+
+# options unique to the given verb
+case "${verb}" in
+    build)
+        set -- \
+            --cmake-args \
+            " -DCMAKE_CPP_FLAGS=${CPPFLAGS:-}" \
+            " -DCMAKE_CXX_COMPILER=${CXX:-$(command -v c++)}" \
+            " -DCMAKE_CXX_FLAGS=${CXXFLAGS:-}" \
+            " -DCMAKE_C_COMPILER=${CC:-$(command -v cc)}" \
+            " -DCMAKE_C_FLAGS=${CFLAGS:-}" \
+            " -DCMAKE_VERBOSE_MAKEFILE=true" \
+            "$@"
+        ;;
+    test)
+        set -- \
+            --abort-on-error \
+            --return-code-on-test-failure \
+            "$@"
+        ;;
+    *) ;;
+esac
+
+# parallel execution and event handlers
+case "${verb}" in
+    build | test)
+        set -- \
+            --executor parallel \
+            --parallel-workers "$(((1 + $(nproc)) / 2))" \
+            --event-handlers \
+            compile_commands+ \
+            console_cohesion+ \
+            console_direct+ \
+            console_package_list+ \
+            console_start_end+ \
+            console_stderr+ \
+            desktop_notification- \
+            event_log+ \
+            log+ \
+            log_command+ \
+            status+ \
+            store_result+ \
+            summary+ \
+            terminal_title- \
+            "$@"
+        ;;
+    *) ;;
+esac
+
+# verbosity
+case "${verb}" in
+    extension-points | extensions | test-result)
+        set -- \
+            --verbose \
+            --all \
+            "$@"
+        ;;
+    *) ;;
+esac
+
+colcon "${verb}" "$@"
+
+exit "$?"
+
+# ALL colcon --event-handlers:
+#
+# compile_commands
+# console_cohesion
+# console_direct
+# console_package_list
+# console_start_end
+# console_stderr
+# desktop_notification
+# event_log
+# log
+# log_command
+# status
+# store_result
+# summary
+# terminal_title
+
+# DEFAULT colcon --event-handlers:
+#
+# compile_commands+
+# console_cohesion-
+# console_direct-
+# console_package_list-
+# console_start_end+
+# console_stderr+
+# desktop_notification+
+# event_log+
+# log+
+# log_command+
+# status-
+# store_result+
+# summary+
+# terminal_title-
