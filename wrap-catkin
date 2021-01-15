@@ -4,9 +4,12 @@
 
 set -euvx
 
-readonly this="$(readlink -f "$0")"
-readonly whatami="$(basename "${this}")"
-readonly tmpdir="$(mktemp -dt "${whatami}.XXXXXX")"
+this="$(readlink -f "$0")"
+readonly this="${this}"
+whatami="$(basename "${this}")"
+readonly whatami="${whatami}"
+tmpdir="$(mktemp -dt "${whatami}.XXXXXX")"
+readonly tmpdir="${tmpdir}"
 
 log() { echo "${whatami}[$$]: $*" >&2; }
 error() { log "ERROR: $*"; }
@@ -27,6 +30,7 @@ cleanup() {
 
 usage() {
     cat <<EOF
+
 Usage: $0 -- [CATKIN_ARG]... [CATKIN_OPT]...
 Wrap an invocation to catkin with some super-verbose options.
 
