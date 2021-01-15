@@ -52,6 +52,8 @@ EOF
 trap cleanup EXIT
 export TMPDIR="${tmpdir}"
 export LC_ALL=C
+export COLCON_DEFAULT_EXECUTOR=parallel
+export COLCON_EXTENSION_BLOCKLIST=colcon_core.event_handler.desktop_notification
 
 while getopts ":h" opt; do
     case "${opt}" in
@@ -94,11 +96,10 @@ case "${verb}" in
     *) ;;
 esac
 
-# parallel execution and event handlers
+# parallel workers and event handlers
 case "${verb}" in
     build | test)
         set -- \
-            --executor parallel \
             --parallel-workers "$(((1 + $(nproc)) / 2))" \
             --event-handlers \
             compile_commands+ \
@@ -107,7 +108,6 @@ case "${verb}" in
             console_package_list+ \
             console_start_end+ \
             console_stderr+ \
-            desktop_notification- \
             event_log+ \
             log+ \
             log_command+ \
@@ -123,10 +123,7 @@ esac
 # verbosity
 case "${verb}" in
     extension-points | extensions | test-result)
-        set -- \
-            --verbose \
-            --all \
-            "$@"
+        set -- --verbose --all "$@"
         ;;
     *) ;;
 esac
