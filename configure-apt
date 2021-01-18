@@ -51,10 +51,6 @@ Examples:
 
     \$ $0 -f public
 
-    \$ $0 trusty
-
-    \$ $0 xenial
-
     \$ $0 bionic
 
 EOF
@@ -466,7 +462,7 @@ cat >"${rtr_ros_comp_list}" <<'EOF'
 main
 EOF
 case "${distribution}" in
-    xenial | bionic)
+    bionic)
         setup_apt_list \
             "${rtr_ros_repo_uri}" \
             "${rtr_ros_atyp_list}" \
@@ -503,7 +499,7 @@ cat >"${rtr_freecad_comp_list}" <<'EOF'
 main
 EOF
 case "${distribution}" in
-    xenial | bionic)
+    bionic)
         setup_apt_list \
             "${rtr_freecad_repo_uri}" \
             "${rtr_freecad_atyp_list}" \
