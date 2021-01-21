@@ -47,6 +47,32 @@ Examples:
 EOF
 }
 
+# Run the given command in a subshell piped to sed because (1.) we can protect
+# the terminal from the given command and (2.) we can nuke all of the ANSI
+# escape codes. Because the subshell can't modifiy variables in its parent, we
+# have to write the colcon exit status into a temporary file and read it after
+# exiting the subshell.
+# 
+# References:
+#
+# * https://en.wikipedia.org/wiki/ANSI_escape_code
+# * https://unix.stackexchange.com/a/14699
+# * https://unix.stackexchange.com/a/55547
+deansi_eval() {
+    # shellcheck disable=SC2039
+    local return_code=""
+    return_code="$(mktemp -t return_code.XXXXXX)"
+    if eval "$@"; then
+        echo "$?" >"${return_code}"
+    else
+        echo "$?" >"${return_code}"
+    fi | sed 's/\x1b\[[0-9;?]*[JKmsu]//g'
+    return "$(
+        xargs <"${return_code}"
+        rm -f "${return_code}"
+    )"
+}
+
 ################################################################################
 
 trap cleanup EXIT
@@ -128,21 +154,6 @@ case "${verb}" in
     *) ;;
 esac
 
-# Run colcon in a subshell piped to sed because (1.) we protect the terminal
-# from colcon and (2.) we can nuke all of the ANSI escape codes. Because the
-# subshell can't modifiy variables in its parent, we have to write the colcon
-# exit status into a temporary file and read it after exiting the subshell.
-return_code="$(mktemp -t return_code.XXXXXX)"
-if colcon "${verb}" "$@"; then
-    echo "$?" >"${return_code}"
-else
-    echo "$?" >"${return_code}"
-fi | sed 's/\x1b\[.\{0,5\}[JKmsu]//g'
+deansi_eval colcon "${verb}" "$@"
 
-exit "$(xargs <"${return_code}")"
-
-# References:
-#
-# * https://en.wikipedia.org/wiki/ANSI_escape_code
-# * https://unix.stackexchange.com/a/14699
-# * https://unix.stackexchange.com/a/55547
+exit "$?"
