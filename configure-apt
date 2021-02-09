@@ -4,10 +4,14 @@
 
 set -eu
 
-readonly this="$(readlink -f "$0")"
-readonly here="$(dirname "$0")"
-readonly whatami="$(basename "${this}")"
-readonly tmpdir="$(mktemp -dt "${whatami}.XXXXXX")"
+this="$(readlink -f "$0")"
+readonly this="${this}"
+here="$(dirname "$0")"
+readonly here="${here}"
+whatami="$(basename "${this}")"
+readonly whatami="${whatami}"
+tmpdir="$(mktemp -dt "${whatami}.XXXXXX")"
+readonly tmpdir="${tmpdir}"
 
 log() { echo "${whatami}[$$]: $*" >&2; }
 error() { log "ERROR: $*"; }
@@ -56,68 +60,42 @@ Examples:
 EOF
 }
 
-# 3.282 Portable Filename Character Set
-# https://pubs.opengroup.org/onlinepubs/9699919799/basedefs/V1_chap03.html#tag_03_282
-filenamify() {
-    printf '%s' "$*" | tr -sc '[:alnum:]._-' '_'
-}
-
-apt_config_path() {
-    cut -d= -f2 | xargs -n1 | paste -sd/ | xargs readlink -f
-}
-
-# /etc/apt/trusted.gpg.d/*.asc
-etc_apt_trusted_gpg_d() {
-    # https://manpages.debian.org/stable/apt/apt-key.8.en.html
-    apt-config shell _ Dir _ Dir::Etc _ Dir::Etc::trustedparts | apt_config_path
-}
-
-# /etc/apt/sources.list.d/*.list
-etc_apt_sources_list_d() {
-    # https://manpages.debian.org/stable/apt/sources.list.5.en.html
-    apt-config shell _ Dir _ Dir::Etc _ Dir::Etc::sourceparts | apt_config_path
-}
-
-# /etc/apt/auth.conf.d/*.conf
-etc_apt_auth_conf_d() {
-    # https://manpages.debian.org/stable/apt/apt_auth.conf.5.en.html
-    apt-config shell _ Dir _ Dir::Etc _ Dir::Etc::netrcparts | apt_config_path
-}
-
-# /etc/apt/apt.conf.d/*
-etc_apt_apt_conf_d() {
-    # https://manpages.debian.org/stable/apt/apt.conf.5.en.html
-    apt-config shell _ Dir _ Dir::Etc _ Dir::Etc::parts | apt_config_path
-}
-
-detect_distribution() {
+# `source` the given source_file and echo the value of the given
+# variable_name. Return success if the file exists and variable is defined and
+# its value is non-empty; else, return failure.
+#
+# $1 : source_file
+# $2 : variable_name
+source_var() (
+    if ! [ 2 -eq "$#" ]; then
+        error "bad args"
+        return 1
+    fi
+    # shellcheck disable=SC2039
+    local source_file="$1"
+    # shellcheck disable=SC2039
+    local variable_name="$2"
+    if ! [ -f "${source_file}" ]; then
+        error "missing file: ${source_file}"
+        return 1
+    fi
+    set --
+    set +euvx
+    # shellcheck disable=SC1090
+    . "${source_file}" >&2
+    set -euvx
     # shellcheck disable=SC2039
     local result=""
-    if command -v lsb_release >/dev/null 2>&1; then
-        if result="$(lsb_release --short --codename)"; then
-            echo "${result}"
-            return 0
-        else
-            warning "FAILURE: lsb_release --short --codename"
-        fi
-    else
-        warning "missing command: lsb_release"
+    eval "result=\${${variable_name}:-}"
+    if [ -z "${result}" ]; then
+        error "undefined/empty variable: ${variable_name}"
+        return 1
     fi
-    if [ -f /etc/os-release ]; then
-        # shellcheck disable=1091
-        if result="$(
-            . /etc/os-release
-            echo "${UBUNTU_CODENAME:-}"
-        )"; then
-            echo "${result}"
-            return 0
-        else
-            warning "/etc/os-release: undefined UBUNTU_CODENAME"
-        fi
-    else
-        warning "missing file: /etc/os-release"
-    fi
-    return 1
+    echo "${result}"
+)
+
+detect_distribution() {
+    source_var /etc/os-release VERSION_CODENAME
 }
 
 vet_force_network() {
@@ -135,6 +113,54 @@ vet_force_network() {
             return 1
             ;;
     esac
+}
+
+# take apt-config variable; print its value
+#
+# $1 : apt-config variable; e.g., "Dir::Etc::sourceparts"
+apt_config_get() {
+    # shellcheck disable=SC2039
+    local acc=""
+    # shellcheck disable=SC2039
+    local ele=""
+    echo "$1" | sed 's,::,\n,g' | while read -r ele; do
+        acc="${acc:-}${acc:+::}${ele}"
+        apt-config shell _ "${acc}" | cut -d= -f2- | xargs -n1
+    done | paste -sd/ | xargs readlink -f
+}
+
+# take arbitrary string, generate its associated *.list file path under
+# Dir::Etc::sourceparts; i.e., /etc/apt/sources.list.d/*.list
+#
+# > SOURCES.LIST.D
+#
+# > The /etc/apt/sources.list.d directory provides a way to add sources.list
+# > entries in separate files. Two different file formats are allowed as
+# > described in the next two sections. Filenames need to have either the
+# > extension .list or .sources depending on the contained format. The
+# > filenames may only contain letters (a-z and A-Z), digits (0-9), underscore
+# > (_), hyphen (-) and period (.) characters. Otherwise APT will print a
+# > notice that it has ignored a file, unless that file matches a pattern in
+# > the Dir::Ignore-Files-Silently configuration list - in which case it will
+# > be silently ignored.
+#
+# -- https://manpages.debian.org/stable/apt/sources.list.5.html
+dir_etc_sourceparts_list() {
+    # shellcheck disable=SC2039
+    local dir_etc_sourceparts=""
+    if ! dir_etc_sourceparts="$(apt_config_get Dir::Etc::sourceparts)"; then
+        error "FAILURE: apt_config_get Dir::Etc::sourceparts"
+        return 1
+    fi
+    # shellcheck disable=SC2039
+    local result=""
+    result="${dir_etc_sourceparts}/$(printf '%s.list' "$1" | tr -sc '[:alnum:][_][-][.]' '_')"
+    echo "${result}"
+}
+
+read_into() {
+    cat >"$1"
+    info "installed: $1"
 }
 
 # Take some things that describe an apt repository. Write a generated apt
@@ -156,16 +182,29 @@ setup_apt_list() {
 
     # list file is named for the uri it references
     # shellcheck disable=SC2039
-    local apt_list_file=""
-    apt_list_file="$(etc_apt_sources_list_d)/$(filenamify "${repo_uri}").list"
-    info "installing: ${apt_list_file}"
-    if [ -f "${apt_list_file}" ]; then
-        warning "file exists: ${apt_list_file}"
-        warning "$(mv -v "${apt_list_file}" "${apt_list_file}.save")"
+    local list_file=""
+    if ! list_file="$(dir_etc_sourceparts_list "${repo_uri}")"; then
+        error "FAILURE: dir_etc_sourceparts_list ${repo_uri}"
+        return 1
     fi
-    # write header
-    cat >"${apt_list_file}" <<EOF
-# ${apt_list_file}
+    if [ -f "${list_file}" ]; then
+        warning "overwriting extant file: ${list_file}"
+    fi
+
+    # write list file
+    # Make sure atyp and dist are padded to the longest member
+    # shellcheck disable=SC2039
+    local atyp_width=""
+    atyp_width="$(echo "${atyp_list}" | tr ',' '\n' | wc -L)"
+    # shellcheck disable=SC2039
+    local dist_width=""
+    dist_width="$(echo "${dist_list}" | tr ',' '\n' | wc -L)"
+    echo "${atyp_list}" | tr ',' '\n' | while read -r atyp; do
+        echo "${dist_list}" | tr ',' '\n' | while read -r dist; do
+            if ! [ -s "${list_file}" ]; then
+                # is empty, write header
+                cat <<EOF
+# ${list_file}
 #
 # This is a generated apt sources list file.
 #
@@ -177,23 +216,14 @@ setup_apt_list() {
 # date      : $(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
 EOF
-    # write body
-    # Make sure atyp and dist are padded to the longest member
-    # shellcheck disable=SC2039
-    local atyp_width=""
-    atyp_width="$(wc -L <"${atyp_list}")"
-    # shellcheck disable=SC2039
-    local dist_width=""
-    dist_width="$(wc -L <"${dist_list}")"
-    while read -r atyp; do
-        while read -r dist; do
+            fi
             printf "%-${atyp_width}s %s %-${dist_width}s %s\n" \
                 "${atyp}" \
                 "${repo_uri}" \
                 "${dist}" \
-                "$(paste -sd' ' <"${comp_list}")"
-        done <"${dist_list}"
-    done <"${atyp_list}" >>"${apt_list_file}"
+                "$(echo "${comp_list}" | tr ',' ' ')"
+        done
+    done | read_into "${list_file}"
 }
 
 ################################################################################
@@ -253,11 +283,21 @@ fi
 
 ################################################################################
 
-#########################################
-# ##################################### #
-# # PACKAGECLOUD.IO REALTIME-ROBOTICS # #
-# ##################################### #
-#########################################
+# https://manpages.debian.org/apt-key; /etc/apt/trusted.gpg.d/*.asc
+dir_etc_trustedparts="$(apt_config_get Dir::Etc::trustedparts)"
+info "Dir::Etc::trustedparts: ${dir_etc_trustedparts}"
+
+# https://manpages.debian.org/sources.list; /etc/apt/sources.list.d/*.list
+dir_etc_sourceparts="$(apt_config_get Dir::Etc::sourceparts)"
+info "Dir::Etc::sourceparts: ${dir_etc_sourceparts}"
+
+# https://manpages.debian.org/apt_auth.conf; /etc/apt/auth.conf.d/*.conf
+dir_etc_netrcparts="$(apt_config_get Dir::Etc::netrcparts)"
+info "Dir::Etc::netrcparts: ${dir_etc_netrcparts}"
+
+# https://manpages.debian.org/apt.conf; /etc/apt/apt.conf.d/*
+dir_etc_parts="$(apt_config_get Dir::Etc::parts)"
+info "Dir::Etc::parts: ${dir_etc_parts}"
 
 ################################################################################
 
@@ -270,7 +310,7 @@ if [ "private" = "${use_network:-public}" ]; then
     #       423D522AA23B50C66F214F97219EACCE6579994C
     # uid           [ultimate] https://packagecloud.io/realtime-robotics/rtr-robot-models (https://packagecloud.io/docs#gpg_signing) <support@packagecloud.io>
     # sub   rsa4096 2020-08-26 [SEA]
-    cat >"$(etc_apt_trusted_gpg_d)/realtime-robotics_rtr-robot-models.asc" <<'EOF'
+    read_into "${dir_etc_trustedparts}/realtime-robotics_rtr-robot-models.asc" <<'EOF'
 -----BEGIN PGP PUBLIC KEY BLOCK-----
 
 mQINBF9Giu0BEADjXY5nJpqEIbF7XlwybUdREHhu6315m1GjyfkP5RkIhoiJQGbu
@@ -337,25 +377,11 @@ vde56TzMaMXuJzY0MeXp0KofuKy1NE7TcFAIi1fLVmAY
 =e8DN
 -----END PGP PUBLIC KEY BLOCK-----
 EOF
-    readonly rtr_robot_models_repo_uri="http://apt.realtime.cxm/apt/realtime-robotics/rtr-robot-models/${distribution}"
-    readonly rtr_robot_models_atyp_list="$(mktemp -t rtr_robot_models_atyp_list.XXXXXX)"
-    cat >"${rtr_robot_models_atyp_list}" <<'EOF'
-deb
-deb-src
-EOF
-    readonly rtr_robot_models_dist_list="$(mktemp -t rtr_robot_models_dist_list.XXXXXX)"
-    cat >"${rtr_robot_models_dist_list}" <<EOF
-${distribution}
-EOF
-    readonly rtr_robot_models_comp_list="$(mktemp -t rtr_robot_models_comp_list.XXXXXX)"
-    cat >"${rtr_robot_models_comp_list}" <<'EOF'
-main
-EOF
     setup_apt_list \
-        "${rtr_robot_models_repo_uri}" \
-        "${rtr_robot_models_atyp_list}" \
-        "${rtr_robot_models_dist_list}" \
-        "${rtr_robot_models_comp_list}"
+        "http://apt.realtime.cxm/apt/${distribution}/realtime-robotics/rtr-robot-models" \
+        "deb,deb-src" \
+        "${distribution}" \
+        "main"
 else
     if ! [ -x "${here}/packagecloud-apt" ]; then
         die "missing executable: ${here}/packagecloud-apt"
@@ -367,22 +393,20 @@ else
         --master-token "${RTR_ROBOT_MODELS_MASTER_TOKEN}" \
         --account "realtime-robotics" \
         --repo "rtr-robot-models" \
-        --output-asc "$(etc_apt_trusted_gpg_d)/realtime-robotics_rtr-robot-models.asc" \
-        --output-list "$(etc_apt_sources_list_d)/realtime-robotics_rtr-robot-models.list" \
-        --output-auth "$(etc_apt_auth_conf_d)/realtime-robotics_rtr-robot-models.conf"
+        --output-asc "${dir_etc_trustedparts}/realtime-robotics_rtr-robot-models.asc" \
+        --output-list "${dir_etc_sourceparts}/realtime-robotics_rtr-robot-models.list" \
+        --output-auth "${dir_etc_netrcparts}/realtime-robotics_rtr-robot-models.conf"
 fi
 
 ################################################################################
 
-#######################################
-# ################################### #
-# # LAUNCHPAD PPA REALTIME-ROBOTICS # #
-# ################################### #
-#######################################
+###################################
+# LAUNCHPAD PPA REALTIME-ROBOTICS #
+###################################
 
 # pub   4096R/8A68278A 2020-03-16
 # uid                  Launchpad PPA for realtime-robotics
-cat >"$(etc_apt_trusted_gpg_d)/0xae0f78ce556b80ab48ce556f208dac2d8a68278a.asc" <<'EOF'
+read_into "${dir_etc_trustedparts}/0xae0f78ce556b80ab48ce556f208dac2d8a68278a.asc" <<'EOF'
 -----BEGIN PGP PUBLIC KEY BLOCK-----
 
 mQINBF5vsKcBEACw/lMOWu4aQBG2155Tqji9x7S7QqOIoXdzHLu1J7uih3DHweoS
@@ -444,30 +468,17 @@ EOF
 #######################################
 
 if [ "private" = "${use_network:-public}" ]; then
-    readonly rtr_ros_repo_uri="http://apt.realtime.cxm/apt/realtime-robotics/ros/${distribution}"
+    readonly rtr_ros_repo_uri="http://apt.realtime.cxm/apt/${distribution}/realtime-robotics/ros"
 else
     readonly rtr_ros_repo_uri="http://ppa.launchpad.net/realtime-robotics/ros/ubuntu"
 fi
-readonly rtr_ros_atyp_list="$(mktemp -t rtr_ros_atyp_list.XXXXXX)"
-cat >"${rtr_ros_atyp_list}" <<'EOF'
-deb
-deb-src
-EOF
-readonly rtr_ros_dist_list="$(mktemp -t rtr_ros_dist_list.XXXXXX)"
-cat >"${rtr_ros_dist_list}" <<EOF
-${distribution}
-EOF
-readonly rtr_ros_comp_list="$(mktemp -t rtr_ros_comp_list.XXXXXX)"
-cat >"${rtr_ros_comp_list}" <<'EOF'
-main
-EOF
 case "${distribution}" in
     bionic)
         setup_apt_list \
             "${rtr_ros_repo_uri}" \
-            "${rtr_ros_atyp_list}" \
-            "${rtr_ros_dist_list}" \
-            "${rtr_ros_comp_list}"
+            "deb,deb-src" \
+            "${distribution}" \
+            "main"
         ;;
     *)
         warning "missing ${distribution}: ${rtr_ros_repo_uri}"
@@ -481,30 +492,17 @@ esac
 ###########################################
 
 if [ "private" = "${use_network:-public}" ]; then
-    readonly rtr_freecad_repo_uri="http://apt.realtime.cxm/apt/realtime-robotics/freecad/${distribution}"
+    readonly rtr_freecad_repo_uri="http://apt.realtime.cxm/apt/${distribution}/realtime-robotics/freecad"
 else
     readonly rtr_freecad_repo_uri="http://ppa.launchpad.net/realtime-robotics/freecad/ubuntu"
 fi
-readonly rtr_freecad_atyp_list="$(mktemp -t rtr_freecad_atyp_list.XXXXXX)"
-cat >"${rtr_freecad_atyp_list}" <<'EOF'
-deb
-deb-src
-EOF
-readonly rtr_freecad_dist_list="$(mktemp -t rtr_freecad_dist_list.XXXXXX)"
-cat >"${rtr_freecad_dist_list}" <<EOF
-${distribution}
-EOF
-readonly rtr_freecad_comp_list="$(mktemp -t rtr_freecad_comp_list.XXXXXX)"
-cat >"${rtr_freecad_comp_list}" <<'EOF'
-main
-EOF
 case "${distribution}" in
     bionic)
         setup_apt_list \
             "${rtr_freecad_repo_uri}" \
-            "${rtr_freecad_atyp_list}" \
-            "${rtr_freecad_dist_list}" \
-            "${rtr_freecad_comp_list}"
+            "deb,deb-src" \
+            "${distribution}" \
+            "main"
         ;;
     *)
         warning "missing ${distribution}: ${rtr_ros_repo_uri}"
@@ -520,7 +518,7 @@ esac
 # pub   4096R/68576280 2014-06-13
 # uid                  NodeSource <gpg@nodesource.com>
 # sub   4096R/AA01DA2C 2014-06-13
-cat >"$(etc_apt_trusted_gpg_d)/0x9fd3b784bc1c6fc31a8a0a1c1655a0ab68576280.asc" <<'EOF'
+read_into "${dir_etc_trustedparts}/0x9fd3b784bc1c6fc31a8a0a1c1655a0ab68576280.asc" <<'EOF'
 -----BEGIN PGP PUBLIC KEY BLOCK-----
 Version: GnuPG v1
 Comment: GPGTools - https://gpgtools.org
@@ -579,55 +577,29 @@ EOF
 # node_10.x #
 #############
 if [ "private" = "${use_network:-public}" ]; then
-    readonly node_10_x_repo_uri="http://apt.realtime.cxm/apt/node_10.x/${distribution}"
+    readonly node_10_x_repo_uri="http://apt.realtime.cxm/apt/${distribution}/node/10.x"
 else
     readonly node_10_x_repo_uri="http://deb.nodesource.com/node_10.x"
 fi
-readonly node_10_x_atyp_list="$(mktemp -t node_10_x_atyp_list.XXXXXX)"
-cat >"${node_10_x_atyp_list}" <<'EOF'
-deb
-deb-src
-EOF
-readonly node_10_x_dist_list="$(mktemp -t node_10_x_dist_list.XXXXXX)"
-cat >"${node_10_x_dist_list}" <<EOF
-${distribution}
-EOF
-readonly node_10_x_comp_list="$(mktemp -t node_10_x_comp_list.XXXXXX)"
-cat >"${node_10_x_comp_list}" <<'EOF'
-main
-EOF
 setup_apt_list \
     "${node_10_x_repo_uri}" \
-    "${node_10_x_atyp_list}" \
-    "${node_10_x_dist_list}" \
-    "${node_10_x_comp_list}"
+    "deb,deb-src" \
+    "${distribution}" \
+    "main"
 
 #############
 # node_14.x #
 #############
 if [ "private" = "${use_network:-public}" ]; then
-    readonly node_14_x_repo_uri="http://apt.realtime.cxm/apt/node_14.x/${distribution}"
+    readonly node_14_x_repo_uri="http://apt.realtime.cxm/apt/${distribution}/node/14.x"
 else
     readonly node_14_x_repo_uri="http://deb.nodesource.com/node_14.x"
 fi
-readonly node_14_x_atyp_list="$(mktemp -t node_14_x_atyp_list.XXXXXX)"
-cat >"${node_14_x_atyp_list}" <<'EOF'
-deb
-deb-src
-EOF
-readonly node_14_x_dist_list="$(mktemp -t node_14_x_dist_list.XXXXXX)"
-cat >"${node_14_x_dist_list}" <<EOF
-${distribution}
-EOF
-readonly node_14_x_comp_list="$(mktemp -t node_14_x_comp_list.XXXXXX)"
-cat >"${node_14_x_comp_list}" <<'EOF'
-main
-EOF
 setup_apt_list \
     "${node_14_x_repo_uri}" \
-    "${node_14_x_atyp_list}" \
-    "${node_14_x_dist_list}" \
-    "${node_14_x_comp_list}"
+    "deb,deb-src" \
+    "${distribution}" \
+    "main"
 
 ################################################################################
 
@@ -638,7 +610,7 @@ setup_apt_list \
 # pub   rsa4096 2018-07-30 [SC]
 #       E75D0B33338407411D357F51B9732172C4830B8F
 # uid           [ unknown] Launchpad PPA for Intel OpenCL Neo team
-cat >"$(etc_apt_trusted_gpg_d)/0xe75d0b33338407411d357f51b9732172c4830b8f.asc" <<'EOF'
+read_into "${dir_etc_trustedparts}/0xe75d0b33338407411d357f51b9732172c4830b8f.asc" <<'EOF'
 -----BEGIN PGP PUBLIC KEY BLOCK-----
 
 mQINBFtfLLEBEACcIu2ICEu3biKqm1FvkBDdO1KQSVUbVm6wq0WndNy4+rOm/w2h
@@ -669,28 +641,15 @@ HZNM11NOI6Bq2m0PIs1086JAhrkGopucVuB4hwd1bAal36ws
 -----END PGP PUBLIC KEY BLOCK-----
 EOF
 if [ "private" = "${use_network:-public}" ]; then
-    readonly intel_opencl_repo_uri="http://apt.realtime.cxm/apt/intel-opencl/${distribution}"
+    readonly intel_opencl_repo_uri="http://apt.realtime.cxm/apt/${distribution}/intel-opencl"
 else
     readonly intel_opencl_repo_uri="http://ppa.launchpad.net/intel-opencl/intel-opencl/ubuntu"
 fi
-readonly intel_opencl_atyp_list="$(mktemp -t intel_opencl_atyp_list.XXXXXX)"
-cat >"${intel_opencl_atyp_list}" <<'EOF'
-deb
-deb-src
-EOF
-readonly intel_opencl_dist_list="$(mktemp -t intel_opencl_dist_list.XXXXXX)"
-cat >"${intel_opencl_dist_list}" <<EOF
-${distribution}
-EOF
-readonly intel_opencl_comp_list="$(mktemp -t intel_opencl_comp_list.XXXXXX)"
-cat >"${intel_opencl_comp_list}" <<'EOF'
-main
-EOF
 setup_apt_list \
     "${intel_opencl_repo_uri}" \
-    "${intel_opencl_atyp_list}" \
-    "${intel_opencl_dist_list}" \
-    "${intel_opencl_comp_list}"
+    "deb,deb-src" \
+    "${distribution}" \
+    "main"
 
 ################################################################################
 
@@ -700,7 +659,7 @@ setup_apt_list \
 
 # pub   rsa2048 2018-01-09 [SC] [expires: 2028-01-08]
 # uid           [ unknown] "CN = Intel(R) Intel(R) Realsense", O=Intel Corporation
-cat >"$(etc_apt_trusted_gpg_d)/0xf6e65ac044f831ac80a06380c8b3a55a6f3efcde.asc" <<'EOF'
+read_into "${dir_etc_trustedparts}/0xf6e65ac044f831ac80a06380c8b3a55a6f3efcde.asc" <<'EOF'
 -----BEGIN PGP PUBLIC KEY BLOCK-----
 
 mQENBFpUqDEBCADuIoVeNfgr3owUxn0keHq9OPak+Phxk4ye/paDZ5JZ6D407GXt
@@ -721,27 +680,15 @@ quh0EmUG2XwVM89VNH4Y45USyqal4RhISMw=
 -----END PGP PUBLIC KEY BLOCK-----
 EOF
 if [ "private" = "${use_network:-public}" ]; then
-    readonly realsense_repo_uri="http://apt.realtime.cxm/apt/realsense/${distribution}"
+    readonly realsense_repo_uri="http://apt.realtime.cxm/apt/${distribution}/realsense"
 else
     readonly realsense_repo_uri="http://realsense-hw-public.s3.amazonaws.com/Debian/apt-repo"
 fi
-readonly realsense_atyp_list="$(mktemp -t realsense_atyp_list.XXXXXX)"
-cat >"${realsense_atyp_list}" <<'EOF'
-deb
-EOF
-readonly realsense_dist_list="$(mktemp -t realsense_dist_list.XXXXXX)"
-cat >"${realsense_dist_list}" <<EOF
-${distribution}
-EOF
-readonly realsense_comp_list="$(mktemp -t realsense_comp_list.XXXXXX)"
-cat >"${realsense_comp_list}" <<'EOF'
-main
-EOF
 setup_apt_list \
     "${realsense_repo_uri}" \
-    "${realsense_atyp_list}" \
-    "${realsense_dist_list}" \
-    "${realsense_comp_list}"
+    "deb" \
+    "${distribution}" \
+    "main"
 
 ################################################################################
 
@@ -751,7 +698,7 @@ setup_apt_list \
 
 # pub   4096R/AB17C654 2019-05-30 [expires: 2021-05-29]
 # uid                  Open Robotics <info@osrfoundation.org>
-cat >"$(etc_apt_trusted_gpg_d)/0xc1cf6e31e6bade8868b172b4f42ed6fbab17c654.asc" <<'EOF'
+read_into "${dir_etc_trustedparts}/0xc1cf6e31e6bade8868b172b4f42ed6fbab17c654.asc" <<'EOF'
 -----BEGIN PGP PUBLIC KEY BLOCK-----
 Version: GnuPG v1
 
@@ -784,28 +731,15 @@ AHNx8kw4MPUkxExgI7Sd
 -----END PGP PUBLIC KEY BLOCK-----
 EOF
 if [ "private" = "${use_network:-public}" ]; then
-    readonly ros_repo_uri="http://apt.realtime.cxm/apt/ros/${distribution}"
+    readonly ros_repo_uri="http://apt.realtime.cxm/apt/${distribution}/ros"
 else
     readonly ros_repo_uri="http://packages.ros.org/ros/ubuntu"
 fi
-readonly ros_atyp_list="$(mktemp -t ros_atyp_list.XXXXXX)"
-cat >"${ros_atyp_list}" <<'EOF'
-deb
-deb-src
-EOF
-readonly ros_dist_list="$(mktemp -t ros_dist_list.XXXXXX)"
-cat >"${ros_dist_list}" <<EOF
-${distribution}
-EOF
-readonly ros_comp_list="$(mktemp -t ros_comp_list.XXXXXX)"
-cat >"${ros_comp_list}" <<'EOF'
-main
-EOF
 setup_apt_list \
     "${ros_repo_uri}" \
-    "${ros_atyp_list}" \
-    "${ros_dist_list}" \
-    "${ros_comp_list}"
+    "deb,deb-src" \
+    "${distribution}" \
+    "main"
 
 ################################################################################
 
@@ -816,7 +750,7 @@ setup_apt_list \
 # pub   1024D/437D05B5 2004-09-12
 # uid                  Ubuntu Archive Automatic Signing Key <ftpmaster@ubuntu.com>
 # sub   2048g/79164387 2004-09-12
-cat >"$(etc_apt_trusted_gpg_d)/0x630239cc130e1a7fd81a27b140976eaf437d05b5.asc" <<'EOF'
+read_into "${dir_etc_trustedparts}/0x630239cc130e1a7fd81a27b140976eaf437d05b5.asc" <<'EOF'
 -----BEGIN PGP PUBLIC KEY BLOCK-----
 Version: GnuPG v1
 
@@ -851,7 +785,7 @@ EOF
 
 # pub   4096R/C0B21F32 2012-05-11
 # uid                  Ubuntu Archive Automatic Signing Key (2012) <ftpmaster@ubuntu.com>
-cat >"$(etc_apt_trusted_gpg_d)/0x790bc7277767219c42c86f933b4fe6acc0b21f32.asc" <<'EOF'
+read_into "${dir_etc_trustedparts}/0x790bc7277767219c42c86f933b4fe6acc0b21f32.asc" <<'EOF'
 -----BEGIN PGP PUBLIC KEY BLOCK-----
 Version: GnuPG v1
 
@@ -884,46 +818,22 @@ K1JOw/g4GnpX8iLGEX1V
 -----END PGP PUBLIC KEY BLOCK-----
 EOF
 if [ "private" = "${use_network:-public}" ]; then
-    readonly ubuntu_repo_uri="http://apt.realtime.cxm/apt/ubuntu/${distribution}"
+    readonly ubuntu_repo_uri="http://apt.realtime.cxm/apt/${distribution}/ubuntu"
 else
     readonly ubuntu_repo_uri="http://archive.ubuntu.com/ubuntu"
 fi
-readonly ubuntu_atyp_list="$(mktemp -t ubuntu_atyp_list.XXXXXX)"
-cat >"${ubuntu_atyp_list}" <<'EOF'
-deb
-deb-src
-EOF
-readonly ubuntu_dist_list="$(mktemp -t ubuntu_dist_list.XXXXXX)"
-cat >"${ubuntu_dist_list}" <<EOF
-${distribution}
-${distribution}-backports
-${distribution}-security
-${distribution}-updates
-EOF
-readonly ubuntu_comp_list="$(mktemp -t ubuntu_comp_list.XXXXXX)"
-cat >"${ubuntu_comp_list}" <<'EOF'
-main
-restricted
-universe
-multiverse
-EOF
 setup_apt_list \
     "${ubuntu_repo_uri}" \
-    "${ubuntu_atyp_list}" \
-    "${ubuntu_dist_list}" \
-    "${ubuntu_comp_list}"
-
-##############
-# UBUNTU END #
-##############
+    "deb,deb-src" \
+    "${distribution},${distribution}-backports,${distribution}-security,${distribution}-updates" \
+    "main,restricted,universe,multiverse"
 
 # proactive protection against a bad proxy
 #
 # * https://askubuntu.com/questions/679233/failed-to-fetch-hash-sum-mismatch-tried-rm-apt-list-but-didnt-work
 # * https://serverfault.com/questions/722893/debian-mirror-hash-sum-mismatch
 # * https://gist.github.com/trastle/5722089
-info "install $(etc_apt_apt_conf_d)/99fixbadproxy"
-cat >"$(etc_apt_apt_conf_d)/99fixbadproxy" <<'FIXBADPROXY'
+read_into "${dir_etc_parts}/99fixbadproxy" <<'FIXBADPROXY'
 Acquire::http::Pipeline-Depth "0";
 Acquire::http::No-Cache=True;
 Acquire::BrokenProxy=true;

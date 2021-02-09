@@ -4,9 +4,12 @@
 
 set -eu
 
-readonly this="$(readlink -f "$0")"
-readonly whatami="$(basename "${this}")"
-readonly tmpdir="$(mktemp -dt "${whatami}.XXXXXX")"
+this="$(readlink -f "$0")"
+readonly this="${this}"
+whatami="$(basename "${this}")"
+readonly whatami="${whatami}"
+tmpdir="$(mktemp -dt "${whatami}.XXXXXX")"
+readonly tmpdir="${tmpdir}"
 
 log() { echo "${whatami}[$$]: $*" >&2; }
 error() { log "ERROR: $*"; }
@@ -57,32 +60,68 @@ Notes:
 EOF
 }
 
+# `source` the given source_file and echo the value of the given
+# variable_name. Return success if the file exists and variable is defined and
+# its value is non-empty; else, return failure.
+#
+# $1 : source_file
+# $2 : variable_name
+source_var() (
+    if ! [ 2 -eq "$#" ]; then
+        error "bad args"
+        return 1
+    fi
+    # shellcheck disable=SC2039
+    local source_file="$1"
+    # shellcheck disable=SC2039
+    local variable_name="$2"
+    if ! [ -f "${source_file}" ]; then
+        error "missing file: ${source_file}"
+        return 1
+    fi
+    set --
+    set +euvx
+    # shellcheck disable=SC1090
+    . "${source_file}" >&2
+    set -euvx
+    # shellcheck disable=SC2039
+    local result=""
+    eval "result=\${${variable_name}:-}"
+    if [ -z "${result}" ]; then
+        error "undefined/empty variable: ${variable_name}"
+        return 1
+    fi
+    echo "${result}"
+)
+
 detect_os() {
-    if command -v lsb_release >/dev/null 2>&1; then
-        lsb_release --short --id | awk '{print tolower($0)}'
-        return 0
-    fi
-    if [ -f /etc/lsb-release ]; then
-        # shellcheck disable=SC1091
-        . /etc/lsb-release
-        echo "${DISTRIB_ID}" | awk '{print tolower($0)}'
-        return 0
-    fi
-    return 1
+    source_var /etc/os-release ID
 }
 
 detect_dist() {
-    if command -v lsb_release >/dev/null 2>&1; then
-        lsb_release --short --codename
-        return 0
-    fi
-    if [ -f /etc/lsb-release ]; then
-        # shellcheck disable=SC1091
-        . /etc/lsb-release
-        echo "${DISTRIB_CODENAME}"
-        return 0
-    fi
-    return 1
+    source_var /etc/os-release VERSION_CODENAME
+}
+
+spit_provenance() {
+    cat <<EOF
+# PACKAGECLOUD_ACCOUNT      : ${PACKAGECLOUD_ACCOUNT}
+# PACKAGECLOUD_REPO         : ${PACKAGECLOUD_REPO}
+# PACKAGECLOUD_MASTER_TOKEN : **$(echo "${PACKAGECLOUD_MASTER_TOKEN}" | grep -o ....$)
+# PACKAGECLOUD_OS           : ${PACKAGECLOUD_OS}
+# PACKAGECLOUD_DIST         : ${PACKAGECLOUD_DIST}
+# PACKAGECLOUD_UNIQUE_ID    : ${PACKAGECLOUD_UNIQUE_ID}
+
+# hostname  : $(hostname)
+# user      : $(id)
+# generator : ${this}
+# date      : $(date -uIseconds)
+
+EOF
+}
+
+read_into() {
+    cat >"$1"
+    info "installed: $1"
 }
 
 ################################################################################
@@ -186,7 +225,7 @@ fi
 # PACKAGECLOUD_MASTER_TOKEN
 if [ -n "${PACKAGECLOUD_MASTER_TOKEN:-}" ]; then
     readonly PACKAGECLOUD_MASTER_TOKEN="${PACKAGECLOUD_MASTER_TOKEN}"
-    info "PACKAGECLOUD_MASTER_TOKEN: ${PACKAGECLOUD_MASTER_TOKEN}"
+    info "PACKAGECLOUD_MASTER_TOKEN: **$(echo "${PACKAGECLOUD_MASTER_TOKEN}" | grep -o ....$)"
 else
     die "undefined PACKAGECLOUD_MASTER_TOKEN"
 fi
@@ -290,7 +329,7 @@ readonly read_token="${read_token}"
 info "read_token: ${read_token}"
 
 curl -fsSLo "${PACKAGECLOUD_OUTPUT_ASC}" "${gpg_key_url}"
-info "wrote asc pubkey to: ${PACKAGECLOUD_OUTPUT_ASC}"
+info "installed: ${PACKAGECLOUD_OUTPUT_ASC}"
 
 ################################################################################
 
@@ -308,38 +347,24 @@ curl -fsSLo "${config_file_list}" \
     --data-urlencode "name=${PACKAGECLOUD_UNIQUE_ID}" \
     "https://packagecloud.io/install/repositories/${PACKAGECLOUD_ACCOUNT}/${PACKAGECLOUD_REPO}/config_file.list"
 
-if ! repo_uri="$(grep -Eom1 'https://[[:xdigit:]]{48}:@[[:graph:]]+' "${config_file_list}")"; then
+if ! repo_uri="$(grep -Eom1 "https://${read_token}:@[[:graph:]]+" "${config_file_list}")"; then
     die "failed to parse repo_uri: ${config_file_list}"
 fi
-readonly repo_uri="${repo_uri}"
-info "repo_uri: ${repo_uri}"
 readonly repo_url="${repo_uri#*:@}"
 info "repo_url: ${repo_url}"
 
-cat >"${PACKAGECLOUD_OUTPUT_LIST}" <<EOF
+{
+    cat <<EOF
 # ${PACKAGECLOUD_OUTPUT_LIST}
 
 # this is a generated apt sources list file for a packagecloud.io repository
 
 # https://manpages.debian.org/stable/apt/sources.list.5.html
 
-# PACKAGECLOUD_ACCOUNT      : ${PACKAGECLOUD_ACCOUNT}
-# PACKAGECLOUD_REPO         : ${PACKAGECLOUD_REPO}
-# PACKAGECLOUD_MASTER_TOKEN : **$(echo "${PACKAGECLOUD_MASTER_TOKEN}" | cut -c44-)
-# PACKAGECLOUD_OS           : ${PACKAGECLOUD_OS}
-# PACKAGECLOUD_DIST         : ${PACKAGECLOUD_DIST}
-# PACKAGECLOUD_UNIQUE_ID    : ${PACKAGECLOUD_UNIQUE_ID}
-
-# hostname  : $(hostname)
-# user      : $(id)
-# generator : ${this}
-# date      : $(date -uIseconds)
-
-$(sed -n "/^deb/s,${read_token}:@,,gp" "${config_file_list}")
-
 EOF
-
-info "wrote apt list to: ${PACKAGECLOUD_OUTPUT_LIST}"
+    spit_provenance
+    sed -n "/^deb/s,${read_token}:@,,gp" "${config_file_list}"
+} | read_into "${PACKAGECLOUD_OUTPUT_LIST}"
 
 ################################################################################
 
@@ -347,29 +372,21 @@ info "wrote apt list to: ${PACKAGECLOUD_OUTPUT_LIST}"
 # WRITE APT AUTH CONF #
 #######################
 
-cat >"${PACKAGECLOUD_OUTPUT_AUTH}" <<EOF
+{
+    cat <<EOF
 # ${PACKAGECLOUD_OUTPUT_AUTH}
 
 # this is a generated apt auth config file for a packagecloud.io repository
 
 # https://manpages.debian.org/stable/apt/apt_auth.conf.5.html
 
-# PACKAGECLOUD_ACCOUNT      : ${PACKAGECLOUD_ACCOUNT}
-# PACKAGECLOUD_REPO         : ${PACKAGECLOUD_REPO}
-# PACKAGECLOUD_MASTER_TOKEN : **$(echo "${PACKAGECLOUD_MASTER_TOKEN}" | cut -c44-)
-# PACKAGECLOUD_OS           : ${PACKAGECLOUD_OS}
-# PACKAGECLOUD_DIST         : ${PACKAGECLOUD_DIST}
-# PACKAGECLOUD_UNIQUE_ID    : ${PACKAGECLOUD_UNIQUE_ID}
-
-# hostname  : $(hostname)
-# user      : $(id)
-# generator : ${this}
-# date      : $(date -uIseconds)
-
+EOF
+    spit_provenance
+    cat <<EOF
 machine ${repo_url}
 login ${read_token}
 password
-
 EOF
+} | read_into "${PACKAGECLOUD_OUTPUT_AUTH}"
 
 exit "$?"
