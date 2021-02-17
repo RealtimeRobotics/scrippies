@@ -180,16 +180,9 @@ setup_apt_list() {
     # shellcheck disable=SC2039
     local comp_list="$4"
 
-    # list file is named for the uri it references
     # shellcheck disable=SC2039
-    local list_file=""
-    if ! list_file="$(dir_etc_sourceparts_list "${repo_uri}")"; then
-        error "FAILURE: dir_etc_sourceparts_list ${repo_uri}"
-        return 1
-    fi
-    if [ -f "${list_file}" ]; then
-        warning "overwriting extant file: ${list_file}"
-    fi
+    local tmp_sources_list=""
+    tmp_sources_list="$(mktemp -t tmp_sources_list.XXXXXX)"
 
     # write list file
     # Make sure atyp and dist are padded to the longest member
@@ -199,12 +192,40 @@ setup_apt_list() {
     # shellcheck disable=SC2039
     local dist_width=""
     dist_width="$(echo "${dist_list}" | tr ',' '\n' | wc -L)"
-    echo "${atyp_list}" | tr ',' '\n' | while read -r atyp; do
-        echo "${dist_list}" | tr ',' '\n' | while read -r dist; do
-            if ! [ -s "${list_file}" ]; then
-                # is empty, write header
-                cat <<EOF
-# ${list_file}
+    echo "${dist_list}" | tr ',' '\n' | while read -r dist; do
+        if ! curl -fsSLI "${repo_uri}/dists/${dist}/Release" >/dev/null 2>&1; then
+            warning "SKIPPING MISSING: ${repo_uri}/dists/${dist}/Release"
+            continue
+        fi
+        echo "${atyp_list}" | tr ',' '\n' | while read -r atyp; do
+            printf "%-${atyp_width}s %s %-${dist_width}s %s\n" \
+                "${atyp}" \
+                "${repo_uri}" \
+                "${dist}" \
+                "$(echo "${comp_list}" | tr ',' ' ')"
+        done
+    done >"${tmp_sources_list}"
+
+    if ! [ -s "${tmp_sources_list}" ]; then
+        warning "NOTHING TO INSTALL: $*"
+        return 0
+    fi
+
+    # sources_list file is named for the uri it references
+    # shellcheck disable=SC2039
+    local sources_list=""
+    if ! sources_list="$(dir_etc_sourceparts_list "${repo_uri}")"; then
+        error "FAILURE: dir_etc_sourceparts_list ${repo_uri}"
+        return 1
+    fi
+
+    if [ -f "${sources_list}" ]; then
+        warning "overwriting extant file: ${sources_list}"
+    fi
+    {
+        # write header
+        cat <<EOF
+# ${sources_list}
 #
 # This is a generated apt sources list file.
 #
@@ -216,14 +237,9 @@ setup_apt_list() {
 # date      : $(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
 EOF
-            fi
-            printf "%-${atyp_width}s %s %-${dist_width}s %s\n" \
-                "${atyp}" \
-                "${repo_uri}" \
-                "${dist}" \
-                "$(echo "${comp_list}" | tr ',' ' ')"
-        done
-    done | read_into "${list_file}"
+        # write body
+        cat "${tmp_sources_list}"
+    } | read_into "${sources_list}"
 }
 
 ################################################################################
@@ -463,27 +479,16 @@ EOF
 
 ################################################################################
 
-#######################################
-# LAUNCHPAD PPA REALTIME-ROBOTICS ROS #
-#######################################
+############################################
+# LAUNCHPAD PPA REALTIME-ROBOTICS CADEXSDK #
+############################################
 
 if [ "private" = "${use_network:-public}" ]; then
-    readonly rtr_ros_repo_uri="http://apt.realtime.cxm/apt/${distribution}/realtime-robotics/ros"
+    readonly rtr_cadexsdk_repo_uri="http://apt.realtime.cxm/apt/${distribution}/realtime-robotics/cadexsdk"
 else
-    readonly rtr_ros_repo_uri="http://ppa.launchpad.net/realtime-robotics/ros/ubuntu"
+    readonly rtr_cadexsdk_repo_uri="http://ppa.launchpad.net/realtime-robotics/cadexsdk/ubuntu"
 fi
-case "${distribution}" in
-    bionic)
-        setup_apt_list \
-            "${rtr_ros_repo_uri}" \
-            "deb,deb-src" \
-            "${distribution}" \
-            "main"
-        ;;
-    *)
-        warning "missing ${distribution}: ${rtr_ros_repo_uri}"
-        ;;
-esac
+setup_apt_list "${rtr_cadexsdk_repo_uri}" "deb,deb-src" "${distribution}" "main"
 
 ################################################################################
 
@@ -496,18 +501,20 @@ if [ "private" = "${use_network:-public}" ]; then
 else
     readonly rtr_freecad_repo_uri="http://ppa.launchpad.net/realtime-robotics/freecad/ubuntu"
 fi
-case "${distribution}" in
-    bionic)
-        setup_apt_list \
-            "${rtr_freecad_repo_uri}" \
-            "deb,deb-src" \
-            "${distribution}" \
-            "main"
-        ;;
-    *)
-        warning "missing ${distribution}: ${rtr_ros_repo_uri}"
-        ;;
-esac
+setup_apt_list "${rtr_freecad_repo_uri}" "deb,deb-src" "${distribution}" "main"
+
+################################################################################
+
+#######################################
+# LAUNCHPAD PPA REALTIME-ROBOTICS ROS #
+#######################################
+
+if [ "private" = "${use_network:-public}" ]; then
+    readonly rtr_ros_repo_uri="http://apt.realtime.cxm/apt/${distribution}/realtime-robotics/ros"
+else
+    readonly rtr_ros_repo_uri="http://ppa.launchpad.net/realtime-robotics/ros/ubuntu"
+fi
+setup_apt_list "${rtr_ros_repo_uri}" "deb,deb-src" "${distribution}" "main"
 
 ################################################################################
 
