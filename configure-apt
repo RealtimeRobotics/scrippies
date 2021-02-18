@@ -588,11 +588,17 @@ if [ "private" = "${use_network:-public}" ]; then
 else
     readonly node_10_x_repo_uri="http://deb.nodesource.com/node_10.x"
 fi
-setup_apt_list \
-    "${node_10_x_repo_uri}" \
-    "deb,deb-src" \
-    "${distribution}" \
-    "main"
+setup_apt_list "${node_10_x_repo_uri}" "deb,deb-src" "${distribution}" "main"
+
+#############
+# node_12.x #
+#############
+if [ "private" = "${use_network:-public}" ]; then
+    readonly node_12_x_repo_uri="http://apt.realtime.cxm/apt/${distribution}/node/12.x"
+else
+    readonly node_12_x_repo_uri="http://deb.nodesource.com/node_12.x"
+fi
+setup_apt_list "${node_12_x_repo_uri}" "deb,deb-src" "${distribution}" "main"
 
 #############
 # node_14.x #
@@ -602,11 +608,7 @@ if [ "private" = "${use_network:-public}" ]; then
 else
     readonly node_14_x_repo_uri="http://deb.nodesource.com/node_14.x"
 fi
-setup_apt_list \
-    "${node_14_x_repo_uri}" \
-    "deb,deb-src" \
-    "${distribution}" \
-    "main"
+setup_apt_list "${node_14_x_repo_uri}" "deb,deb-src" "${distribution}" "main"
 
 ################################################################################
 
