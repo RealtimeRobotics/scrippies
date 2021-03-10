@@ -334,6 +334,7 @@ unless_exists_eval "${linux_dir}/.patched" patch \
     find . -maxdepth 1 -type f -name '.config*' -exec rm -vf {} +
 
     cat >.config.rt <<EOF
+CONFIG_DEBUG_INFO=n
 CONFIG_DEBUG_PREEMPT=y
 CONFIG_HAVE_PREEMPT_LAZY=y
 CONFIG_HIGH_RES_TIMERS=y
