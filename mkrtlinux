@@ -326,19 +326,36 @@ unless_exists_eval "${linux_dir}/.patched" patch \
     --strip 1 \
     --input "${patch_file}" >&2
 
-make -C "${linux_dir}" defconfig
+################################################################################
 
-"${linux_dir}/scripts/config" --file "${linux_dir}/.config" --enable HIGH_RES_TIMERS
-"${linux_dir}/scripts/config" --file "${linux_dir}/.config" --enable HZ_1000
-"${linux_dir}/scripts/config" --file "${linux_dir}/.config" --enable PREEMPT_RT
-"${linux_dir}/scripts/config" --file "${linux_dir}/.config" --enable PREEMPT_RT_FULL
+(
+    cd "${linux_dir}"
 
-yes "" | make -C "${linux_dir}" oldconfig
+    find . -maxdepth 1 -type f -name '.config*' -exec rm -vf {} +
 
-# these variables are consumed within `scripts/package/builddeb`
-make \
-    KDEB_CHANGELOG_DIST="${distribution}" \
-    KDEB_PKGVERSION="${package_version}" \
-    -C "${linux_dir}" deb-pkg "$@"
+    cat >.config.rt <<EOF
+CONFIG_DEBUG_INFO=n
+CONFIG_DEBUG_PREEMPT=y
+CONFIG_HAVE_PREEMPT_LAZY=y
+CONFIG_HIGH_RES_TIMERS=y
+CONFIG_HZ_1000=y
+CONFIG_PREEMPT=y
+CONFIG_PREEMPTION=y
+CONFIG_PREEMPT_RCU=y
+CONFIG_PREEMPT_RT=y
+CONFIG_PREEMPT_RT_FULL=y
+EOF
+
+    cp -v "/boot/config-$(uname -r)" .config.upstream
+    cp -v .config.upstream .config
+
+    ./scripts/kconfig/merge_config.sh .config .config.rt
+    ./scripts/diffconfig .config.upstream .config
+    make \
+        KDEB_CHANGELOG_DIST="${distribution}" \
+        KDEB_PKGVERSION="${package_version}" \
+        deb-pkg "$@"
+    exit "$?"
+)
 
 exit "$?"
