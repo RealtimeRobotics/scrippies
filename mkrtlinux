@@ -355,7 +355,6 @@ EOF
         KDEB_CHANGELOG_DIST="${distribution}" \
         KDEB_PKGVERSION="${package_version}" \
         deb-pkg "$@"
-    exit "$?"
 )
 
 exit "$?"
