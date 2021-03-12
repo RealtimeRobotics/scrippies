@@ -99,6 +99,7 @@ deansi_eval catkin "$@" \
     --no-status \
     --summarize \
     --verbose \
+    --force-cmake \
     --cmake-args \
     -DCMAKE_BUILD_TYPE="${CMAKE_BUILD_TYPE:-RelWithDebInfo}" \
     -DCMAKE_CPP_FLAGS="${CPPFLAGS:-}" \
