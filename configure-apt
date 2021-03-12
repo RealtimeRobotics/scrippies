@@ -480,6 +480,19 @@ EOF
 ################################################################################
 
 ############################################
+# LAUNCHPAD PPA REALTIME-ROBOTICS ARENASDK #
+############################################
+
+if [ "private" = "${use_network:-public}" ]; then
+    readonly rtr_arenasdk_repo_uri="http://apt.realtime.cxm/apt/${distribution}/realtime-robotics/arenasdk"
+else
+    readonly rtr_arenasdk_repo_uri="http://ppa.launchpad.net/realtime-robotics/arenasdk/ubuntu"
+fi
+setup_apt_list "${rtr_arenasdk_repo_uri}" "deb,deb-src" "${distribution}" "main"
+
+################################################################################
+
+############################################
 # LAUNCHPAD PPA REALTIME-ROBOTICS CADEXSDK #
 ############################################
 
@@ -515,6 +528,19 @@ else
     readonly rtr_ros_repo_uri="http://ppa.launchpad.net/realtime-robotics/ros/ubuntu"
 fi
 setup_apt_list "${rtr_ros_repo_uri}" "deb,deb-src" "${distribution}" "main"
+
+################################################################################
+
+###########################################
+# LAUNCHPAD PPA REALTIME-ROBOTICS RTLINUX #
+###########################################
+
+if [ "private" = "${use_network:-public}" ]; then
+    readonly rtr_rtlinux_repo_uri="http://apt.realtime.cxm/apt/${distribution}/realtime-robotics/rtlinux"
+else
+    readonly rtr_rtlinux_repo_uri="http://ppa.launchpad.net/realtime-robotics/rtlinux/ubuntu"
+fi
+setup_apt_list "${rtr_rtlinux_repo_uri}" "deb,deb-src" "${distribution}" "main"
 
 ################################################################################
 
