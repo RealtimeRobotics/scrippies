@@ -47,6 +47,14 @@ Examples:
 EOF
 }
 
+# take nothing and detect the installed ros_distro; print ros_distro on
+# success; print nothing on failure
+detect_ros_distro() {
+    find /opt/ros -maxdepth 1 -mindepth 1 -type d -exec basename -a {} + \
+        | paste -sd, \
+        | grep -Eox '[[:lower:]]{4,}'
+}
+
 # Run the given command in a subshell piped to sed because (1.) we can protect
 # the terminal from the given command and (2.) we can nuke all of the ANSI
 # escape codes. Because the subshell can't modifiy variables in its parent, we
@@ -96,6 +104,8 @@ shift "$((OPTIND - 1))"
 if ! [ 0 -lt "$#" ]; then
     die "bad args"
 fi
+
+################################################################################
 
 readonly verb="$1"
 shift
@@ -153,6 +163,28 @@ case "${verb}" in
         ;;
     *) ;;
 esac
+
+################################################################################
+
+if [ -n "${ROS_DISTRO:-}" ]; then
+    info "defined ROS_DISTRO: ${ROS_DISTRO}"
+elif ROS_DISTRO="$(detect_ros_distro)"; then
+    warning "detected ROS_DISTRO: ${ROS_DISTRO}"
+else
+    die "undefined and/or undetected ROS_DISTRO"
+fi
+export ROS_DISTRO
+
+if ! [ -f "/opt/ros/${ROS_DISTRO}/setup.sh" ]; then
+    die "missing file: /opt/ros/${ROS_DISTRO}/setup.sh"
+fi
+
+set +euvx
+# shellcheck disable=SC1090
+. "/opt/ros/${ROS_DISTRO}/setup.sh"
+set -euvx
+
+################################################################################
 
 deansi_eval colcon "${verb}" "$@"
 
