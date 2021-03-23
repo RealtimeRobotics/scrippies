@@ -72,8 +72,10 @@ source_var() (
         return 1
     fi
     # shellcheck disable=SC2039
+    # shellcheck disable=SC3043
     local source_file="$1"
     # shellcheck disable=SC2039
+    # shellcheck disable=SC3043
     local variable_name="$2"
     if ! [ -f "${source_file}" ]; then
         error "missing file: ${source_file}"
@@ -85,6 +87,7 @@ source_var() (
     . "${source_file}" >&2
     set -euvx
     # shellcheck disable=SC2039
+    # shellcheck disable=SC3043
     local result=""
     eval "result=\${${variable_name}:-}"
     if [ -z "${result}" ]; then
@@ -120,8 +123,10 @@ vet_force_network() {
 # $1 : apt-config variable; e.g., "Dir::Etc::sourceparts"
 apt_config_get() {
     # shellcheck disable=SC2039
+    # shellcheck disable=SC3043
     local acc=""
     # shellcheck disable=SC2039
+    # shellcheck disable=SC3043
     local ele=""
     echo "$1" | sed 's,::,\n,g' | while read -r ele; do
         acc="${acc:-}${acc:+::}${ele}"
@@ -147,12 +152,14 @@ apt_config_get() {
 # -- https://manpages.debian.org/stable/apt/sources.list.5.html
 dir_etc_sourceparts_list() {
     # shellcheck disable=SC2039
+    # shellcheck disable=SC3043
     local dir_etc_sourceparts=""
     if ! dir_etc_sourceparts="$(apt_config_get Dir::Etc::sourceparts)"; then
         error "FAILURE: apt_config_get Dir::Etc::sourceparts"
         return 1
     fi
     # shellcheck disable=SC2039
+    # shellcheck disable=SC3043
     local result=""
     result="${dir_etc_sourceparts}/$(printf '%s.list' "$1" | tr -sc '[:alnum:][_][-][.]' '_')"
     echo "${result}"
@@ -172,24 +179,31 @@ read_into() {
 # $4 : comp_list ; https://wiki.debian.org/SourcesList#Component
 setup_apt_list() {
     # shellcheck disable=SC2039
+    # shellcheck disable=SC3043
     local repo_uri="$1"
     # shellcheck disable=SC2039
+    # shellcheck disable=SC3043
     local atyp_list="$2"
     # shellcheck disable=SC2039
+    # shellcheck disable=SC3043
     local dist_list="$3"
     # shellcheck disable=SC2039
+    # shellcheck disable=SC3043
     local comp_list="$4"
 
     # shellcheck disable=SC2039
+    # shellcheck disable=SC3043
     local tmp_sources_list=""
     tmp_sources_list="$(mktemp -t tmp_sources_list.XXXXXX)"
 
     # write list file
     # Make sure atyp and dist are padded to the longest member
     # shellcheck disable=SC2039
+    # shellcheck disable=SC3043
     local atyp_width=""
     atyp_width="$(echo "${atyp_list}" | tr ',' '\n' | wc -L)"
     # shellcheck disable=SC2039
+    # shellcheck disable=SC3043
     local dist_width=""
     dist_width="$(echo "${dist_list}" | tr ',' '\n' | wc -L)"
     echo "${dist_list}" | tr ',' '\n' | while read -r dist; do
@@ -213,6 +227,7 @@ setup_apt_list() {
 
     # sources_list file is named for the uri it references
     # shellcheck disable=SC2039
+    # shellcheck disable=SC3043
     local sources_list=""
     if ! sources_list="$(dir_etc_sourceparts_list "${repo_uri}")"; then
         error "FAILURE: dir_etc_sourceparts_list ${repo_uri}"
@@ -502,6 +517,19 @@ else
     readonly rtr_cadexsdk_repo_uri="http://ppa.launchpad.net/realtime-robotics/cadexsdk/ubuntu"
 fi
 setup_apt_list "${rtr_cadexsdk_repo_uri}" "deb,deb-src" "${distribution}" "main"
+
+################################################################################
+
+###############################################
+# LAUNCHPAD PPA REALTIME-ROBOTICS THIRD-PARTY #
+###############################################
+
+if [ "private" = "${use_network:-public}" ]; then
+    readonly rtr_thirdparty_repo_uri="http://apt.realtime.cxm/apt/${distribution}/realtime-robotics/third-party"
+else
+    readonly rtr_thirdparty_repo_uri="http://ppa.launchpad.net/realtime-robotics/third-party/ubuntu"
+fi
+setup_apt_list "${rtr_thirdparty_repo_uri}" "deb,deb-src" "${distribution}" "main"
 
 ################################################################################
 
