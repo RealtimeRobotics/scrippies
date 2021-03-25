@@ -28,9 +28,12 @@
 
 set -eu
 
-readonly this="$(readlink -f "$0")"
-readonly whatami="$(basename "${this}")"
-readonly tmpdir="$(mktemp -dt "${whatami}.XXXXXX")"
+this="$(readlink -f "$0")"
+readonly this="${this}"
+whatami="$(basename "${this}")"
+readonly whatami="${whatami}"
+tmpdir="$(mktemp -dt "${whatami}.XXXXXX")"
+readonly tmpdir="${tmpdir}"
 
 log() { echo "${whatami}[$$]: $*" >&2; }
 error() { log "ERROR: $*"; }
@@ -192,8 +195,10 @@ if ! [ 1 -eq "$#" ]; then
     die "bad args"
 fi
 
-readonly package_name="$1"
-readonly dpkg_listfiles="$(mktemp -t dpkg_listfiles.XXXXXX)"
+package_name="$1"
+readonly package_name="${package_name}"
+dpkg_listfiles="$(mktemp -t dpkg_listfiles.XXXXXX)"
+readonly dpkg_listfiles="${dpkg_listfiles}"
 if ! dpkg -L "${package_name}" >"${dpkg_listfiles}"; then
     if [ "true" = "${requested_unknown:-false}" ]; then
         echo "${package_name}: unknown"
@@ -202,7 +207,8 @@ if ! dpkg -L "${package_name}" >"${dpkg_listfiles}"; then
     die "FAILURE: dpkg -L ${package_name}"
 fi
 
-readonly copyright_list="$(mktemp -t copyright_list.XXXXXX)"
+copyright_list="$(mktemp -t copyright_list.XXXXXX)"
+readonly copyright_list="${copyright_list}"
 if ! grep -E '^/usr/share/doc/[^/]+/copyright$' "${dpkg_listfiles}" >"${copyright_list}"; then
     if [ "true" = "${requested_unknown:-false}" ]; then
         echo "${package_name}: unknown"
@@ -216,7 +222,8 @@ case "$(wc -l <"${copyright_list}")" in
     1) ;;
     *) die "$(wc -l "${copyright_list}")" ;;
 esac
-readonly copyright_file="$(cat "${copyright_list}")"
+copyright_file="$(cat "${copyright_list}")"
+readonly copyright_file="${copyright_file}"
 
 if license="$(reader_10_machine_readable "${copyright_file}")"; then
     debug "SUCCESS: reader_10_machine_readable ${copyright_file}"
@@ -234,5 +241,5 @@ else
     die "failed to discover, infer, or guess license(s): ${package_name}"
 fi
 
-echo "${package_name}: ${license}"
+echo "${license}"
 exit 0
