@@ -87,7 +87,7 @@ normalize_license() {
 
 # lib/reader-10-Machine-readable-v1.sh
 reader_10_machine_readable() {
-    # shellcheck disable=SC2039
+    # shellcheck disable=SC3043
     local format=""
     if ! format="$(grep '^Format:' "$1")"; then
         debug "FAILURE: grep '^Format:' $1"
@@ -111,7 +111,7 @@ reader_10_machine_readable() {
             return 1
             ;;
     esac
-    # shellcheck disable=SC2039
+    # shellcheck disable=SC3043
     local grep_out=""
     grep_out="$(mktemp -t grep_out.XXXXXX)"
     if ! grep '^License: [[:graph:]]+$' "$1" >"${grep_out}"; then
@@ -124,7 +124,7 @@ reader_10_machine_readable() {
 
 # lib/reader-30-fuzzy_common-licenses.sh
 reader_30_fuzzy_common_licenses() {
-    # shellcheck disable=SC2039
+    # shellcheck disable=SC3043
     local grep_out=""
     grep_out="$(mktemp -t grep_out.XXXXXX)"
     if ! grep -Eo '/usr/share/common-licenses/[[:alnum:]_.+-]+[[:alnum:]+]' "$1" >"${grep_out}"; then
@@ -137,7 +137,7 @@ reader_30_fuzzy_common_licenses() {
 
 # lib/reader-50-superfuzzy.sh
 reader_50_superfuzzy() {
-    # shellcheck disable=SC2039
+    # shellcheck disable=SC3043
     local patterns=""
     patterns="$(mktemp -t patterns.XXXXXX)"
     cat >"${patterns}" <<'EOF'
@@ -147,7 +147,7 @@ reader_50_superfuzzy() {
 Creative Commons( Licenses?)?
 Public Domain( Licenses?)?
 EOF
-    # shellcheck disable=SC2039
+    # shellcheck disable=SC3043
     local grep_out=""
     grep_out="$(mktemp -t grep_out.XXXXXX)"
     if ! grep -Ewoi -f "${patterns}" "$1" >"${grep_out}"; then
@@ -160,7 +160,7 @@ EOF
 
 # lib/reader-70-free-licence.sh
 reader_70_free_licence() {
-    # shellcheck disable=SC2039
+    # shellcheck disable=SC3043
     local grep_out=""
     grep_out="$(mktemp -t grep_out.XXXXXX)"
     if ! grep '^License: [[:graph:]]+$' "$1" >"${grep_out}"; then
