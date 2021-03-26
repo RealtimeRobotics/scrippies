@@ -81,11 +81,13 @@ sort -uo "${depends_list}" "${depends_list}"
 
 echo 'Package,Version,Maintainer,Homepage,License'
 while read -r pkg; do
-    dpkg-query \
-        --show \
-        --showformat '${Package},${Version},${Maintainer},${Homepage},' \
-        "${pkg}"
-    "${here}/dpkg-licenses" "${pkg}" || echo "N/A"
+    {
+        dpkg-query \
+            --show \
+            --showformat '#${Package},#${Version},#${Maintainer},#${Homepage},#' \
+            "${pkg}"
+        "${here}/dpkg-licenses" "${pkg}" || echo "NA"
+    } | sed -r 's/#,/NA,/g;s/#//g'
 done <"${depends_list}"
 
 exit "$?"
