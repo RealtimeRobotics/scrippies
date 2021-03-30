@@ -4,11 +4,15 @@
 
 set -eu
 
-readonly this="$(readlink -f "$0")"
-readonly whatami="$(basename "${this}")"
-readonly tmpdir="$(mktemp -dt "${whatami}.XXXXXX")"
+this="$(readlink -f "$0")"
+readonly this="${this}"
+whatami="$(basename "${this}")"
+readonly whatami="${whatami}"
+tmpdir="$(mktemp -dt "${whatami}.XXXXXX")"
+readonly tmpdir="${tmpdir}"
 
-readonly default_bump="patch"
+default_bump="patch"
+readonly default_bump="${default_bump}"
 
 log() { echo "${whatami}[$$]: $*" >&2; }
 error() { log "ERROR: $*"; }
@@ -29,10 +33,12 @@ cleanup() {
 
 usage() {
     cat <<EOF
+
 Usage: $0 [OPTION]...
 Bump the version in every package.xml file
 
 Options:
+
     -h,--help       print help and exit
     -n,--dry-run    don't actually do anything
     -C CATKIN_WS    run as if started in CATKIN_WS (default: \$PWD)
@@ -142,27 +148,32 @@ cd "${catkin_ws}"
 ################################################################################
 
 # find all CMakeLists.txt files
-readonly cmakelists_txt_list="$(mktemp -t cmakelists_txt_list.XXXXXX)"
+cmakelists_txt_list="$(mktemp -t cmakelists_txt_list.XXXXXX)"
+readonly cmakelists_txt_list="${cmakelists_txt_list}"
 git ls-files | grep -E '^([^/]*/)*CMakeLists[.]txt$' >"${cmakelists_txt_list}"
 sort -uo "${cmakelists_txt_list}" "${cmakelists_txt_list}"
 
 # find all package.xml files
-readonly package_xml_list="$(mktemp -t package_xml_list.XXXXXX)"
+package_xml_list="$(mktemp -t package_xml_list.XXXXXX)"
+readonly package_xml_list="${package_xml_list}"
 git ls-files | grep -E '^([^/]*/)*package[.]xml$' >"${package_xml_list}"
 sort -uo "${package_xml_list}" "${package_xml_list}"
 
 # find all CMakeLists.txt dirs
-readonly cmakelists_txt_dir_list="$(mktemp -t cmakelists_txt_dir_list.XXXXXX)"
+cmakelists_txt_dir_list="$(mktemp -t cmakelists_txt_dir_list.XXXXXX)"
+readonly cmakelists_txt_dir_list="${cmakelists_txt_dir_list}"
 xargs dirname <"${cmakelists_txt_list}" >"${cmakelists_txt_dir_list}"
 sort -uo "${cmakelists_txt_dir_list}" "${cmakelists_txt_dir_list}"
 
 # find all package.xml dirs
-readonly package_xml_dir_list="$(mktemp -t package_xml_dir_list.XXXXXX)"
+package_xml_dir_list="$(mktemp -t package_xml_dir_list.XXXXXX)"
+readonly package_xml_dir_list="${package_xml_dir_list}"
 xargs dirname <"${package_xml_list}" >"${package_xml_dir_list}"
 sort -uo "${package_xml_dir_list}" "${package_xml_dir_list}"
 
 # find all project dirs (have both CMakeLists.txt and package.xml)
-readonly project_dir_list="$(mktemp -t project_dir_list.XXXXXX)"
+project_dir_list="$(mktemp -t project_dir_list.XXXXXX)"
+readonly project_dir_list="${project_dir_list}"
 comm -12 "${package_xml_dir_list}" "${cmakelists_txt_dir_list}" >"${project_dir_list}"
 sort -uo "${project_dir_list}" "${project_dir_list}"
 if ! [ -s "${project_dir_list}" ]; then
@@ -179,7 +190,9 @@ done
 # generate list of good package.xml
 sed 's,$,/package.xml,g' <"${project_dir_list}" >"${package_xml_list}"
 
-readonly duples="$(mktemp -t duples.XXXXXX)"
+# generate list of duples; each duple is version triplet and package.xml path
+duples="$(mktemp -t duples.XXXXXX)"
+readonly duples="${duples}"
 while read -r package_xml; do
     triplet="$(
         sed -nr 's|.*<version>([[:digit:]]+\.[[:digit:]]+\.[[:digit:]]+)</version>.*|\1|gp' \
@@ -192,7 +205,8 @@ while read -r package_xml; do
 done <"${package_xml_list}" >"${duples}"
 sort -Vuo "${duples}" "${duples}"
 
-readonly triplet_list="$(mktemp -t triplet_list.XXXXXX)"
+triplet_list="$(mktemp -t triplet_list.XXXXXX)"
+readonly triplet_list="${triplet_list}"
 cut -f1 <"${duples}" >"${triplet_list}"
 sort -Vuo "${triplet_list}" "${triplet_list}"
 
@@ -208,15 +222,19 @@ fi
 
 ################################################################################
 
-readonly old_triplet="$(xargs <"${triplet_list}")"
+old_triplet="$(xargs <"${triplet_list}")"
+readonly old_triplet="${old_triplet}"
 if ! is_good_triplet "${old_triplet}"; then
     die "bad old_triplet: ${old_triplet}"
 fi
 info "old_triplet: ${old_triplet}"
 
-readonly old_major="$(echo "${old_triplet}" | cut -d. -f1)"
-readonly old_minor="$(echo "${old_triplet}" | cut -d. -f2)"
-readonly old_patch="$(echo "${old_triplet}" | cut -d. -f3)"
+old_major="$(echo "${old_triplet}" | cut -d. -f1)"
+readonly old_major="${old_major}"
+old_minor="$(echo "${old_triplet}" | cut -d. -f2)"
+readonly old_minor="${old_minor}"
+old_patch="$(echo "${old_triplet}" | cut -d. -f3)"
+readonly old_patch="${old_patch}"
 
 case "${bump}" in
     major)
@@ -239,13 +257,15 @@ case "${bump}" in
         ;;
 esac
 
-readonly new_triplet="${new_major}.${new_minor}.${new_patch}"
+new_triplet="${new_major}.${new_minor}.${new_patch}"
+readonly new_triplet="${new_triplet}"
 info "new_triplet: ${new_triplet}"
 
 # assumes we want to replace every instance of the old_triplet with the
 # new_triplet; this is pretty aggressive and may collide with version strings
 # that we _don't_ want to change
-readonly sed_expr="s|${old_major}\.${old_minor}\.${old_patch}|${new_major}\.${new_minor}\.${new_patch}|g"
+sed_expr="s|${old_major}\.${old_minor}\.${old_patch}|${new_major}\.${new_minor}\.${new_patch}|g"
+readonly sed_expr="${sed_expr}"
 if [ "true" = "${requested_dry_run:-false}" ]; then
     info "DRY run: modifying package.xml files"
     xargs sed -r -e "${sed_expr}" <"${package_xml_list}" >/dev/null
@@ -275,7 +295,8 @@ if ! [ "true" = "${git_tag:-false}" ]; then
     exit "$?"
 fi
 
-readonly cmd_git_tag="git -C \"${catkin_ws}\" tag --sign --message=\"tag version ${new_triplet}\" \"${new_triplet}\" HEAD"
+cmd_git_tag="git -C \"${catkin_ws}\" tag --sign --message=\"tag version ${new_triplet}\" \"${new_triplet}\" HEAD"
+readonly cmd_git_tag="${cmd_git_tag}"
 if [ "true" = "${requested_dry_run:-false}" ]; then
     info "DRY run: ${cmd_git_tag}"
 else
