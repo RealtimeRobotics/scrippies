@@ -40,7 +40,7 @@ Bump the version in every package.xml file
 Options:
 
     -h,--help       print help and exit
-    -n,--dry-run    don't actually do anything
+    -n,--dry-run    noop, don't actually do anything
     -C CATKIN_WS    run as if started in CATKIN_WS (default: \$PWD)
     --major         bump the version major number
     --minor         bump the version minor number
@@ -57,6 +57,15 @@ Examples:
     \$ $0 --minor
 
 EOF
+}
+
+maybe_eval() {
+    if [ "true" = "${requested_noop:-false}" ]; then
+        info "noop skipping: $*"
+    else
+        info "executing: $*"
+        eval "$@"
+    fi
 }
 
 # $1 : title
@@ -103,7 +112,7 @@ while [ 0 -lt "$#" ]; do
             shift
             ;;
         -n | --dry-run)
-            readonly requested_dry_run="true"
+            readonly requested_noop="true"
             ;;
         --major)
             readonly bump="major"
@@ -257,6 +266,29 @@ case "${bump}" in
         ;;
 esac
 
+if ! current_branch="$(git -C "${catkin_ws}" name-rev --name-only HEAD)"; then
+    die "FAILURE: git -C ${catkin_ws} name-rev --name-only HEAD"
+fi
+readonly current_branch="${current_branch}"
+info "current_branch: ${current_branch}"
+
+if ! current_remote="$(git -C "${catkin_ws}" config "branch.${current_branch}.remote")"; then
+    die "FAILURE: git -C ${catkin_ws} config branch.${current_branch}.remote"
+fi
+readonly current_remote="${current_remote}"
+info "current_remote: ${current_remote}"
+
+readonly cut_branch="release-${old_triplet}"
+info "cut_branch: ${cut_branch}"
+
+if git -C "${catkin_ws}" rev-parse --verify "${cut_branch}" >/dev/null 2>&1; then
+    die "extant cut branch: ${cut_branch}"
+fi
+
+maybe_eval git -C "${catkin_ws}" branch --verbose "${cut_branch}" "${current_branch}"
+
+maybe_eval git -C "${catkin_ws}" branch --set-upstream-to="${current_remote}" "${cut_branch}"
+
 new_triplet="${new_major}.${new_minor}.${new_patch}"
 readonly new_triplet="${new_triplet}"
 info "new_triplet: ${new_triplet}"
@@ -266,7 +298,7 @@ info "new_triplet: ${new_triplet}"
 # that we _don't_ want to change
 sed_expr="s|${old_major}\.${old_minor}\.${old_patch}|${new_major}\.${new_minor}\.${new_patch}|g"
 readonly sed_expr="${sed_expr}"
-if [ "true" = "${requested_dry_run:-false}" ]; then
+if [ "true" = "${requested_noop:-false}" ]; then
     info "DRY run: modifying package.xml files"
     xargs sed -r -e "${sed_expr}" <"${package_xml_list}" >/dev/null
 else
@@ -282,7 +314,7 @@ fi
 GIT_AUTHOR_DATE="$(date -uIseconds)"
 export GIT_AUTHOR_DATE
 export GIT_COMMITTER_DATE="${GIT_AUTHOR_DATE}"
-if [ "true" = "${requested_dry_run:-false}" ]; then
+if [ "true" = "${requested_noop:-false}" ]; then
     info "DRY run: git commit"
     git -C "${catkin_ws}" commit --all --message="bump version ${new_triplet}" --dry-run || true
 else
@@ -297,7 +329,7 @@ fi
 
 cmd_git_tag="git -C \"${catkin_ws}\" tag --sign --message=\"tag version ${new_triplet}\" \"${new_triplet}\" HEAD"
 readonly cmd_git_tag="${cmd_git_tag}"
-if [ "true" = "${requested_dry_run:-false}" ]; then
+if [ "true" = "${requested_noop:-false}" ]; then
     info "DRY run: ${cmd_git_tag}"
 else
     info "WET run: ${cmd_git_tag}"
