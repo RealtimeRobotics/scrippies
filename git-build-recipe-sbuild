@@ -1,0 +1,375 @@
+#!/bin/sh
+
+# scrippies/git-build-recipe-sbuild
+
+set -euvx
+
+this="$(readlink -f "$0")"
+readonly this="${this}"
+here="$(dirname "$0")"
+readonly here="${here}"
+whatami="$(basename "${this}")"
+readonly whatami="${whatami}"
+tmpdir="$(mktemp -dt "${whatami}.XXXXXX")"
+readonly tmpdir="${tmpdir}"
+
+log() { echo "${whatami}[$$]: $*" >&2; }
+error() { log "ERROR: $*"; }
+warning() { log "WARNING: $*"; }
+info() { log "INFO: $*"; }
+
+die() {
+    error "$*"
+    usage >&2
+    exit 1
+}
+
+cleanup() {
+    status="$?"
+    if [ 0 -eq "${status}" ]; then
+        rm -rf "${tmpdir}"
+    fi
+    return "${status}"
+}
+
+usage() {
+    cat <<EOF
+
+Usage: $0 [OPTION]...
+Run git-build-recipe and sbuild.
+
+Options:
+
+    -h                 print usage and exit
+    -C REPODIR         override repodir (default: \$PWD)
+    -D DISTRIBUTION    override DISTRIBUTION (default: detected)
+
+Examples:
+
+    \$ $0 -h
+
+    \$ $0 -C \$HOME/code/spheretree
+
+    \$ $0 -C \$HOME/code/spheretree -D focal
+
+EOF
+}
+
+# `source` the given source_file and echo the value of the given
+# variable_name. Return success if the file exists and variable is defined and
+# its value is non-empty; else, return failure.
+#
+# $1 : source_file
+# $2 : variable_name
+source_var() (
+    if ! [ 2 -eq "$#" ]; then
+        error "bad args"
+        return 1
+    fi
+    # shellcheck disable=SC3043
+    local source_file="$1"
+    # shellcheck disable=SC3043
+    local variable_name="$2"
+    if ! [ -f "${source_file}" ]; then
+        error "missing file: ${source_file}"
+        return 1
+    fi
+    set --
+    set +euvx
+    # shellcheck disable=SC1090
+    . "${source_file}" >&2
+    set -euvx
+    # shellcheck disable=SC3043
+    local result=""
+    eval "result=\${${variable_name}:-}"
+    if [ -z "${result}" ]; then
+        error "undefined/empty variable: ${variable_name}"
+        return 1
+    fi
+    echo "${result}"
+)
+
+detect_distribution() {
+    source_var /etc/os-release VERSION_CODENAME
+}
+
+# $1 : path
+# $2 : key
+file_key() {
+    # trailing xargs to strip any quotes
+    sed -nr "s,^$2=(.*)$,\1,p" "$1" | xargs
+}
+
+# $1 : path
+# $2 : field
+changelog_key() {
+    # shellcheck disable=SC3043
+    local result=""
+    if ! result="$(dpkg-parsechangelog -l "$1" -S "$2")"; then
+        error "FAILURE: dpkg-parsechangelog -l $1 -S $2"
+        return 1
+    fi
+    if [ -z "${result}" ]; then
+        error "failed to parse $1 $2"
+        return 1
+    fi
+    echo "${result}"
+    return 0
+}
+
+################################################################################
+
+trap cleanup EXIT
+export TMPDIR="${tmpdir}"
+export LC_ALL=C
+
+while getopts ":hC:D:" opt; do
+    case "${opt}" in
+        h)
+            usage
+            exit 0
+            ;;
+        C) readonly repodir="${OPTARG}" ;;
+        D) readonly distribution="${OPTARG}" ;;
+        :) die "missing argument: -${OPTARG}" ;;
+        \?) die "bad option: -${OPTARG}" ;;
+    esac
+done
+shift "$((OPTIND - 1))"
+
+# repodir
+if [ -n "${repodir:-}" ]; then
+    info "repodir: ${repodir}"
+else
+    readonly repodir="${PWD}"
+    warning "defaulting repodir: ${repodir}"
+fi
+
+# distribution
+if [ -n "${distribution:-}" ]; then
+    info "distribution: ${distribution}"
+elif distribution="$(detect_distribution)"; then
+    readonly distribution="${distribution}"
+    warning "detected distribution: ${distribution}"
+else
+    die "failed to get and/or detect distribution"
+fi
+
+if [ -z "${DEBFULLNAME:-}" ]; then
+    die "undefined/empty DEBFULLNAME"
+fi
+if [ -z "${DEBEMAIL:-}" ]; then
+    die "undefined/empty DEBEMAIL"
+fi
+
+################################################################################
+
+# find a chroot that supports the distribution
+
+chroot_list="$(mktemp -t chroot_list.XXXXXX)"
+readonly chroot_list="${chroot_list}"
+schroot --list --all-chroots >"${chroot_list}"
+sort -uo "${chroot_list}" "${chroot_list}"
+cat -n "${chroot_list}"
+
+dir_list="$(mktemp -t dir_list.XXXXXX)"
+readonly dir_list="${dir_list}"
+xargs -n1 schroot --config --chroot <"${chroot_list}" >"${dir_list}"
+sed -nri 's,^directory=(.*)$,\1,gp' "${dir_list}"
+cat -n "${dir_list}"
+
+chroot_dir_list="$(mktemp -t chroot_dir_list.XXXXXX)"
+readonly chroot_dir_list="${chroot_dir_list}"
+paste "${chroot_list}" "${dir_list}" >"${chroot_dir_list}"
+sort -uo "${chroot_dir_list}" "${chroot_dir_list}"
+cat -n "${chroot_dir_list}"
+
+use_chroot=""
+use_dir=""
+while read -r chroot dir; do
+    cat -n "${dir}/etc/os-release"
+    version_codename="$(file_key "${dir}/etc/os-release" 'VERSION_CODENAME')"
+    if [ "${distribution}" = "${version_codename}" ]; then
+        use_chroot="${chroot}"
+        use_dir="${dir}"
+        break
+    fi
+done <"${chroot_dir_list}"
+
+if [ -z "${use_chroot}" ]; then
+    die "no chroot for distribution: ${distribution}"
+fi
+
+readonly use_chroot="${use_chroot}"
+info "use_chroot: ${use_chroot}"
+readonly use_dir="${use_dir}"
+info "use_dir: ${use_dir}"
+
+################################################################################
+
+# discover version_id for the chosen chroot
+
+version_id="$(file_key "${use_dir}/etc/os-release" 'VERSION_ID')"
+readonly version_id="${version_id}"
+if ! echo "${version_id}" | grep -Ewq '[[:digit:]]+([.][[:digit:]]+)*'; then
+    die "malformed version_id: ${version_id}"
+fi
+
+info "version_id: ${version_id}"
+
+################################################################################
+
+# this is how launchpad-buildd does --append-version
+# https://git.launchpad.net/launchpad-buildd/tree/bin/buildrecipe?id=baa644126e00ff3219a4bc13d6588af96fa1c271#n132
+
+append_version="~${version_id}.1"
+readonly append_version="${append_version}"
+info "append_version: ${append_version}"
+
+################################################################################
+
+# create recipe and build dir
+
+recipe="${PWD}/$(basename "${repodir}").recipe"
+readonly recipe="${recipe}"
+info "recipe: ${recipe}"
+cat >"${recipe}" <<EOF
+# git-build-recipe format 0.4 deb-version {debversion}
+file://${repodir} ubuntu/master
+EOF
+
+build_dir="$(mktemp -dt build_dir.XXXXXX)"
+readonly build_dir="${build_dir}"
+
+################################################################################
+
+# git-build-recipe: from git repo build source package
+
+# e.g., launchpad recipe:
+#
+# RUN [
+#     'git-build-recipe',
+#     '--safe',
+#     '--no-build',
+#     '--manifest',
+#     '/home/buildd/build-RECIPEBRANCHBUILD-2763723/chroot-autobuild/home/buildd/work/tree/manifest',
+#     '--distribution',
+#     'bionic',
+#     '--allow-fallback-to-native',
+#     '--append-version',
+#     '~ubuntu18.04.1',
+#     '/home/buildd/build-RECIPEBRANCHBUILD-2763723/chroot-autobuild/home/buildd/work/recipe',
+#     '/home/buildd/build-RECIPEBRANCHBUILD-2763723/chroot-autobuild/home/buildd/work/tree'
+# ]
+
+# for repositories using LFS, this...
+git-build-recipe \
+    --distribution "${distribution}" \
+    --append-version "${append_version}" \
+    "${recipe}" \
+    "${PWD}"
+
+# ...fails with the following errors:
+
+# ERROR MESSAGES BEGIN
+
+# Traceback (most recent call last):
+#   File "/usr/lib/python3/dist-packages/gitbuildrecipe/recipe.py", line 320, in pull_or_clone
+#     base_branch.git_call("checkout", base_branch.commit)
+#   File "/usr/lib/python3/dist-packages/gitbuildrecipe/recipe.py", line 652, in git_call
+#     **kwargs)
+#   File "/usr/lib/python3.6/subprocess.py", line 356, in check_output
+#     **kwargs).stdout
+#   File "/usr/lib/python3.6/subprocess.py", line 438, in run
+#     output=stdout, stderr=stderr)
+# subprocess.CalledProcessError: Command '['git', '-C', '/tmp/outdir.IWkQwZ/rtr-robot-models-abb', 'checkout', 'af3e7e12b466c18d952c0cf2ff8e0c3a73476093']' returned non-zero exit status 128.
+
+# During handling of the above exception, another exception occurred:
+
+# Traceback (most recent call last):
+#   File "/usr/bin/git-build-recipe", line 11, in <module>
+#     load_entry_point('git-build-recipe==0.1', 'console_scripts', 'git-build-recipe')()
+#   File "/usr/lib/python3/dist-packages/gitbuildrecipe/main.py", line 110, in main
+#     build_tree(base_branch, working_directory)
+#   File "/usr/lib/python3/dist-packages/gitbuildrecipe/recipe.py", line 479, in build_tree
+#     _build_inner_tree(base_branch, target_path)
+#   File "/usr/lib/python3/dist-packages/gitbuildrecipe/recipe.py", line 400, in _build_inner_tree
+#     pull_or_clone(base_branch, target_path)
+#   File "/usr/lib/python3/dist-packages/gitbuildrecipe/recipe.py", line 322, in pull_or_clone
+#     raise CheckoutFailed(e.output)
+# gitbuildrecipe.recipe.CheckoutFailed: git checkout failed:
+# WARNING: Multiple 'url.*..insteadof' keys with the same alias: "lp:"
+# Downloading IRB_1600_10-120/geometry/cad/base.cdx (260 KB)
+# Error downloading object: IRB_1600_10-120/geometry/cad/base.cdx (042d912): Smudge error: Error downloading IRB_1600_10-120/geometry/cad/base.cdx (042d912bb9b9d69f496b4d6cf0b16b9866648fe364384d6120480f871d9dea01): batch request: missing protocol: ""
+# WARNING: Multiple 'url.*..insteadof' keys with the same alias: "lp:"
+
+# Errors logged to /tmp/outdir.IWkQwZ/rtr-robot-models-abb/.git/lfs/logs/20210402T134544.395536416.log
+# Use `git lfs logs last` to view the log.
+# error: external filter 'git-lfs filter-process' failed
+# fatal: IRB_1600_10-120/geometry/cad/base.cdx: smudge filter lfs failed
+
+# ERROR MESSAGES END
+
+# Here's some relevant links:
+#
+# https://github.com/git-lfs/git-lfs/issues/3041 : "github.com LFS error:
+# 'batch requested: missing protocol'", wherein a user is unable to clone from
+# a local repository.
+#
+# https://github.com/git-lfs/git-lfs/issues/3073 : "pulling from local
+# repository", wherein ttaylorr explains to some blundering idiot that it's
+# possible to share local storage between two repositories, but it's NOT
+# possible to pull from a 'file:///' uri.
+
+################################################################################
+
+# find the dsc that got built
+
+if ! [ -f "${repodir}/debian/changelog" ]; then
+    die "missing file: ${repodir}/debian/changelog"
+fi
+
+if ! changelog_source="$(changelog_key "${repodir}/debian/changelog" Source)"; then
+    die "FAILURE: changelog_key ${repodir}/debian/changelog Source"
+fi
+readonly changelog_source="${changelog_source}"
+info "changelog_source: ${changelog_source}"
+
+if ! changelog_version="$(changelog_key "${repodir}/debian/changelog" Version)"; then
+    die "FAILURE: changelog_key ${repodir}/debian/changelog Version"
+fi
+readonly changelog_version="${changelog_version}"
+info "changelog_version: ${changelog_version}"
+
+readonly dsc_file="${PWD}/${changelog_source}_${changelog_version}.dsc"
+if ! [ -f "${dsc_file}" ]; then
+    die "missing file: ${dsc_file}"
+fi
+info "dsc_file: ${dsc_file}"
+
+################################################################################
+
+# sbuild-package: from source package build binary package(s)
+
+# e.g., launchpad build:
+#
+# RUN:
+#
+# /usr/share/launchpad-buildd/bin/sbuild-package
+#     PACKAGEBUILD-21316726
+#     amd64
+#     bionic
+#     -c
+#     chroot:build-PACKAGEBUILD-21316726
+#     --arch=amd64
+#     --dist=bionic
+#     --nolog
+#     -A
+#     'spheretree_3.0.1-1~ubuntu18.04.1.dsc'
+
+sbuild \
+    --chroot "${use_chroot}" \
+    --dist "${distribution}" \
+    "${dsc_file}"
+
+exit "$?"
