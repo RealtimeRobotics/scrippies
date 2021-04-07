@@ -6,7 +6,7 @@ set -eu
 
 this="$(readlink -f "$0")"
 readonly this="${this}"
-here="$(dirname "$0")"
+here="$(dirname "${this}")"
 readonly here="${here}"
 whatami="$(basename "${this}")"
 readonly whatami="${whatami}"
