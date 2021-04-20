@@ -36,13 +36,13 @@ Wrap an invocation to colcon with some helpful options.
 
 Examples:
 
-    \$ $0
+    \$ $0 -h
 
-    \$ $0 build
+    \$ $0 build --base-paths src
 
-    \$ $0 test --packages-select-by-dep rtr_utils
+    \$ $0 test --base-paths src --packages-select-by-dep rtr_utils
 
-    \$ $0 test-result
+    \$ $0 --base-paths src test-result
 
 EOF
 }
