@@ -31,7 +31,7 @@ cleanup() {
 usage() {
     cat <<EOF
 
-Usage: $0 COLCON_VERB [[--] [COLCON_ARG]... [COLCON_OPT]...]
+Usage: $0 COLCON_VERB [[COLCON_ARG]... [COLCON_OPT]...]
 Wrap an invocation to colcon with some helpful options.
 
 Examples:
@@ -60,14 +60,14 @@ detect_ros_distro() {
 # escape codes. Because the subshell can't modifiy variables in its parent, we
 # have to write the colcon exit status into a temporary file and read it after
 # exiting the subshell.
-# 
+#
 # References:
 #
 # * https://en.wikipedia.org/wiki/ANSI_escape_code
 # * https://unix.stackexchange.com/a/14699
 # * https://unix.stackexchange.com/a/55547
 deansi_eval() {
-    # shellcheck disable=SC2039
+    # shellcheck disable=SC3043
     local return_code=""
     return_code="$(mktemp -t return_code.XXXXXX)"
     if eval "$@"; then
