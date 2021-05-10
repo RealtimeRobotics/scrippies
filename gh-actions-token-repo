@@ -44,17 +44,13 @@ Options:
 
 Examples:
 
+    \$ $0 -h
+
     \$ $0 RealtimeRobotics/rapidplan
 
 Notes:
 
     * https://docs.github.com/en/rest/reference/actions#create-a-registration-token-for-a-repository
-
-Examples:
-
-    \$ $0 -h
-
-    \$ $0
 
 EOF
 }
