@@ -1,0 +1,118 @@
+#!/bin/sh
+
+# scrippies/gh-actions-token-repo
+
+set -eu
+
+this="$(readlink -f "$0")"
+readonly this="${this}"
+here="$(dirname "${this}")"
+readonly here="${here}"
+whatami="$(basename "${this}")"
+readonly whatami="${whatami}"
+tmpdir="$(mktemp -dt "${whatami}.XXXXXX")"
+readonly tmpdir="${tmpdir}"
+
+log() { echo "${whatami}[$$]: $*" >&2; }
+error() { log "ERROR: $*"; }
+warning() { log "WARNING: $*"; }
+info() { log "INFO: $*"; }
+
+die() {
+    error "$*"
+    usage >&2
+    exit 1
+}
+
+cleanup() {
+    status="$?"
+    if [ 0 -eq "${status}" ]; then
+        rm -rf "${tmpdir}" || true
+    fi
+    return "${status}"
+}
+
+usage() {
+    cat <<EOF
+
+Usage: $0 [OPTION]... ORGANIZATION/REPOSITORY
+Github actions: create registration token for a repository.
+
+Options:
+
+    -h    print usage and exit
+
+Examples:
+
+    \$ $0 RealtimeRobotics/rapidplan
+
+Notes:
+
+    * https://docs.github.com/en/rest/reference/actions#create-a-registration-token-for-a-repository
+
+Examples:
+
+    \$ $0 -h
+
+    \$ $0
+
+EOF
+}
+
+################################################################################
+################################################################################
+################################################################################
+
+trap cleanup EXIT
+export TMPDIR="${tmpdir}"
+export LC_ALL=C
+
+while getopts ":h" opt; do
+    case "${opt}" in
+        h)
+            usage
+            exit 0
+            ;;
+        :) die "missing argument: -${OPTARG}" ;;
+        \?) die "bad option: -${OPTARG}" ;;
+    esac
+done
+shift "$((OPTIND - 1))"
+
+if ! [ 1 -eq "$#" ]; then
+    die "bad args"
+fi
+if [ -z "${GITHUB_API_USER:+x}" ]; then
+    die "undefined/empty: GITHUB_API_USER"
+fi
+
+if [ -z "${GITHUB_API_TOKEN:+x}" ]; then
+    die "undefined/empty: GITHUB_API_TOKEN"
+fi
+
+################################################################################
+
+if ! output="$(
+    curl \
+        --user "${GITHUB_API_USER}:${GITHUB_API_TOKEN}" \
+        --request POST \
+        "https://api.github.com/repos/$1/actions/runners/registration-token" \
+        2>/dev/null
+)"; then
+    die "FAILURE: curl https://api.github.com/repos/$1/actions/runners/registration-token"
+fi
+
+echo "${output}"
+exit "$?"
+
+if ! result="$(
+    echo "${output}" \
+        | sed -nr 's/^  "token": "([[:upper:][:digit:]]{29})",$/\1/gp' \
+        | grep -Eo '[[:upper:][:digit:]]{29}'
+)"; then
+    die "failed to parse token: ${output}"
+fi
+
+echo "${result}"
+
+exit "$?"
