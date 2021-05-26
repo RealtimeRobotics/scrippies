@@ -746,7 +746,7 @@ EOF
 if [ "private" = "${use_network:-public}" ]; then
     readonly realsense_repo_uri="http://apt.realtime.cxm/apt/${distribution}/realsense"
 else
-    readonly realsense_repo_uri="https://realsense-hw-public.s3.amazonaws.com/Debian/apt-repo"
+    readonly realsense_repo_uri="https://librealsense.intel.com/Debian/apt-repo"
 fi
 setup_apt_list \
     "${realsense_repo_uri}" \
