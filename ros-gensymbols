@@ -32,7 +32,7 @@ usage() {
     cat <<EOF
 
 Usage: $0 [OPTION]...
-Generate a symbols file for every ROS unversioned shared object.
+Generate a symbols file for every ROS shared object.
 
 Options:
 
@@ -106,20 +106,49 @@ info "found $(wc -l <"${sofile_list}") shared objects in /opt/ros/${ros_distro}/
 
 info "searching for package owners..."
 
+# find the packages that own the shared object files; output is of the form
+#
+#     pkg1(, pkg2)*: /path/to/libfoo.so
+#     pkg3(, pkg4)*: /path/to/libbar.so
+#
 dpkg_search="$(mktemp -t dpkg_search.XXXXXX)"
 readonly dpkg_search="${dpkg_search}"
-xargs dpkg -S <"${sofile_list}" >"${dpkg_search}"
+xargs dpkg-query --search <"${sofile_list}" >"${dpkg_search}"
 sort -uo "${dpkg_search}" "${dpkg_search}"
+
+# Normalize the output from 'dpkg-query --search' from an "adjacency list" to
+# an "edge list"; output is of the form
+#
+#     pkg1\t/path/to/libfoo.so
+#     pkg2\t/path/to/libfoo.so
+#     pkg3\t/path/to/libbar.so
+#     pkg4\t/path/to/libbar.so
+#
+# Tricky bits:
+#
+# * Output file is a newline-delimited list of tab-separated pairs; the first
+#   field is a package name; the second field is a path to a shared object
+#   file.
+#
+# * This scheme works so long as the tab-separation works. Debian policy
+#   forbids any whitespace (including tabs) in Debian package names.[1] While
+#   not strictly forbidden, Unix and Linux convention heavily discourages
+#   whitespace in paths.[2]
+#
+# * A single path may be claimed by multiple packages; e.g., consider the
+#   output of 'dpkg-query --search /usr/bin'
+#
+# * Tell awk to globally substitute a tab for each '[,:] '. We need this
+#   specificity to avoid breaking within a package name that may contain a
+#   colon-architecture suffix; e.g.,
+#
+#       $ dpkg -S /usr/share/doc/libpcre3
+#       libpcre3:amd64: /usr/share/doc/libpcre3
+#
 package_sofile_list="$(mktemp -t package_sofile_list.XXXXXX)"
 readonly package_sofile_list="${package_sofile_list}"
-
-if false; then
-    sed -r 's|^(.*): (.*)$|\2\t\1|g;s|, |\t|g' \
-        <"${dpkg_search}" >"${package_sofile_list}"
-else
-    awk '{gsub("[,:] ","\t"); for(i=1;i<NF;++i) printf "%s\t%s\n", $i, $NF}' \
-        <"${dpkg_search}" >"${package_sofile_list}"
-fi
+awk '{gsub("[,:] ","\t"); for(i=1;i<NF;++i) printf "%s\t%s\n", $i, $NF}' \
+    <"${dpkg_search}" >"${package_sofile_list}"
 sort -uo "${package_sofile_list}" "${package_sofile_list}"
 
 package_list="$(mktemp -t package_list.XXXXXX)"
@@ -158,7 +187,7 @@ while read -r package; do
     #         -e/opt/ros/${ros_distro}/lib/libbar.so \
     #         -e/opt/ros/${ros_distro}/lib/libqux.so
     #
-    sed -nr "s,^${package}\t([[:graph:]]+)$,-e\1,gp" <"${package_sofile_list}" \
+    sed -nr "s|^${package}\t(.+)$|-e\1|gp" <"${package_sofile_list}" \
         | xargs dpkg-gensymbols -q -p"${package}" -v"${version}" -O"${symbols}" >/dev/null
 
 done <"${package_list}"
@@ -166,3 +195,24 @@ done <"${package_list}"
 info "done"
 
 exit "$?"
+
+# References:
+#
+# [1]:https://www.debian.org/doc/debian-policy/ch-controlfields.html#s-f-source
+# , Section 5 "Control files and their fields", Section 5.6 "List of fields",
+# Section 5.6.1 "Source"
+#
+# > Package names ... must consist only of lower case letters (a-z), digits
+# > (0-9), plus (+) and minus (-) signs, and periods (.). They must be at least
+# > two characters long and must start with an alphanumeric character.
+#
+# [2]:https://pubs.opengroup.org/onlinepubs/9699919799/basedefs/V1_chap03.html#tag_03_282
+#
+# > 3.282 Portable Filename Character Set
+# >
+# > The set of characters from which portable filenames are constructed.
+# >
+# > A B C D E F G H I J K L M N O P Q R S T U V W X Y Z
+# > a b c d e f g h i j k l m n o p q r s t u v w x y z
+# > 0 1 2 3 4 5 6 7 8 9 . _ -
+#
