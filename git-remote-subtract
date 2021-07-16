@@ -1,0 +1,114 @@
+#!/bin/sh
+
+# scrippies/git-remote-subtract
+
+set -eu
+
+this="$(readlink -f "$0")"
+readonly this="${this}"
+whatami="$(basename "${this}")"
+readonly whatami="${whatami}"
+tmpdir="$(mktemp -dt "${whatami}.XXXXXX")"
+readonly tmpdir="${tmpdir}"
+
+log() { echo "${whatami}[$$]: $*" >&2; }
+error() { log "ERROR: $*"; }
+warning() { log "WARNING: $*"; }
+info() { log "INFO: $*"; }
+
+die() {
+    error "$@"
+    usage >&2
+    exit 1
+}
+
+cleanup() {
+    status="$?"
+    rm -rf "${tmpdir}" || true
+    return "${status}"
+}
+
+usage() {
+    cat <<EOF
+
+Usage: $0 [OPTION]... REMOTE_X REMOTE_Y
+Print branches on REMOTE_X not on REMOTE_Y
+
+Options:
+
+    -h            print help and exit
+    -C WORKDIR    run as if started in WORKDIR (default: \$PWD)
+
+Examples:
+
+    \$ $0 -n gitlab github
+
+    \$ $0 -C \$PWD myremote origin
+
+EOF
+}
+
+spit_var() (
+    info "$1: $(eval echo "\$$1")"
+)
+
+warn_var_because() (
+    warning "$2 $1: $(eval echo "\$$1")"
+)
+
+################################################################################
+
+trap cleanup EXIT
+chmod 1777 "${tmpdir}"
+export TMPDIR="${tmpdir}"
+export LC_ALL=C
+
+while getopts ":hC:" opt; do
+    case "${opt}" in
+        h)
+            usage
+            exit 0
+            ;;
+        C) readonly WORKDIR="${OPTARG}" ;;
+        :) die "missing argument: -${OPTARG}" ;;
+        \?) die "bad option: -${OPTARG}" ;;
+    esac
+done
+shift "$((OPTIND - 1))"
+
+if ! [ 2 -eq "$#" ]; then
+    die "bad args"
+fi
+export REMOTE_X="$1"
+spit_var REMOTE_X
+export REMOTE_Y="$2"
+spit_var REMOTE_Y
+
+# WORKDIR
+if [ -n "${WORKDIR:-}" ]; then
+    spit_var WORKDIR
+else
+    readonly WORKDIR="${PWD}"
+    warn_var_because WORKDIR defaulted
+fi
+export WORKDIR
+
+################################################################################
+
+remote_x_branch_list="$(mktemp -t remote_x_branch_list.XXXXXX)"
+readonly remote_x_branch_list="${remote_x_branch_list}"
+git -C "${WORKDIR}" ls-remote --heads "${REMOTE_X}" \
+    | sed -nr 's,^[[:xdigit:]]{40}[[:space:]]+refs/heads/(.*)$,\1,gp' \
+        >"${remote_x_branch_list}"
+sort -uo "${remote_x_branch_list}" "${remote_x_branch_list}"
+
+remote_y_branch_list="$(mktemp -t remote_y_branch_list.XXXXXX)"
+readonly remote_y_branch_list="${remote_y_branch_list}"
+git -C "${WORKDIR}" ls-remote --heads "${REMOTE_Y}" \
+    | sed -nr 's,^[[:xdigit:]]{40}[[:space:]]+refs/heads/(.*)$,\1,gp' \
+        >"${remote_y_branch_list}"
+sort -uo "${remote_y_branch_list}" "${remote_y_branch_list}"
+
+comm -23 "${remote_x_branch_list}" "${remote_y_branch_list}"
+
+exit "$?"
